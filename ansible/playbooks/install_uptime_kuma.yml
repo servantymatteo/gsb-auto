@@ -118,8 +118,9 @@
           const { exec } = require('child_process');
 
           async function configure() {
-            // Attendre que le service soit prêt
-            await new Promise(resolve => setTimeout(resolve, 15000));
+            // Attendre que le service soit prêt ET que les autres services soient déployés
+            console.log('Attente du démarrage complet (60 secondes)...');
+            await new Promise(resolve => setTimeout(resolve, 60000));
 
             console.log('Configuration automatique d\'Uptime Kuma...');
 
@@ -233,12 +234,25 @@
         state: present
       become_user: "{{ uptime_kuma_user }}"
 
+    - name: Créer un script de reconfiguration manuelle
+      copy:
+        content: |
+          #!/bin/bash
+          echo "🔄 Reconfiguration des monitors Uptime Kuma..."
+          echo ""
+          cd /opt/uptime-kuma
+          sudo -u uptime-kuma node /opt/uptime-kuma/auto-configure.js
+          echo ""
+          echo "✅ Terminé ! Consultez le log : /opt/uptime-kuma/configure.log"
+        dest: /usr/local/bin/reconfigure-uptime-kuma
+        mode: '0755'
+
     - name: Exécuter la configuration automatique en arrière-plan
       shell: nohup node /opt/uptime-kuma/auto-configure.js > /opt/uptime-kuma/configure.log 2>&1 &
       args:
         chdir: "{{ uptime_kuma_dir }}"
       become_user: "{{ uptime_kuma_user }}"
-      async: 180
+      async: 300
       poll: 0
 
     - name: Ouvrir le port dans le firewall (si UFW actif)
@@ -297,6 +311,8 @@
           echo -e "${CYAN}👤 Admin : ${YELLOW}admin / admin123${NC}"
           echo -e "${CYAN}👁️  Monitoring de tous vos services${NC}"
           echo ""
+          echo -e "${CYAN}🔧 Reconfigurer les monitors : ${YELLOW}reconfigure-uptime-kuma${NC}"
+          echo ""
         dest: /etc/update-motd.d/99-custom-motd
         mode: '0755'
 
@@ -332,10 +348,16 @@
           💡 Configuration automatique :
           ┌────────────────────────────────────────────────┐
           │ 1. Compte admin créé automatiquement ✓        │
-          │ 2. Scan réseau et détection des services ✓    │
-          │ 3. Monitors ajoutés automatiquement ✓         │
-          │ 4. Consultez /opt/uptime-kuma/configure.log   │
+          │ 2. Scan réseau en cours (60s de délai)        │
+          │ 3. Monitors ajoutés automatiquement           │
+          │ 4. Log : /opt/uptime-kuma/configure.log       │
+          └────────────────────────────────────────────────┘
+
+          🔧 Si les monitors ne sont pas ajoutés :
+          ┌────────────────────────────────────────────────┐
+          │ SSH dans le container et lancez :             │
+          │ $ reconfigure-uptime-kuma                     │
           └────────────────────────────────────────────────┘
 
           ⚠️  IMPORTANT : Changez le mot de passe admin !
-          📝 Les monitors pour Apache et GLPI sont pré-configurés
+          📝 Commande de reconfiguration disponible

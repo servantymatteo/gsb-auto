@@ -240,6 +240,7 @@ if [[ "$launch" == "o" || "$launch" == "O" ]]; then
     DEPLOY_START=$(date +%s)
     cd terraform && TF_IN_AUTOMATION=1 terraform apply --auto-approve -compact-warnings
     DEPLOY_STATUS=$?
+    cd ..
     DEPLOY_END=$(date +%s)
     DEPLOY_TIME=$((DEPLOY_END - DEPLOY_START))
 
@@ -263,12 +264,9 @@ if [[ "$launch" == "o" || "$launch" == "O" ]]; then
             IFS='|' read -r cores memory disk playbook <<< "${VM_CONFIGS[$i]}"
 
             # Récupérer l'IP du container depuis Terraform
-            CONTAINER_IP=$(terraform show -json 2>/dev/null | grep -o "\"ipv4_addresses\":\[\"[^\"]*\"" | head -n $((i+1)) | tail -n 1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+")
-
-            if [ -z "$CONTAINER_IP" ]; then
-                # Fallback : essayer avec terraform state
-                CONTAINER_IP=$(terraform state show "proxmox_lxc.container[\"$vm_name\"]" 2>/dev/null | grep "ipv4_addresses" | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+" | head -n 1)
-            fi
+            cd terraform
+            CONTAINER_IP=$(terraform state show "proxmox_lxc.container[\"$vm_name\"]" 2>/dev/null | grep "ipv4_addresses" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1)
+            cd ..
 
             # Déterminer l'URL en fonction du service
             if [[ "$playbook" == "install_apache.yml" ]]; then
