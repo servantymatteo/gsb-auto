@@ -1,0 +1,44 @@
+# Configuration générée automatiquement par setup.sh
+# Copiez ce fichier en terraform.tfvars et remplissez vos valeurs
+
+# Proxmox
+pm_api_url = "https://VOTRE-IP:8006/api2/json"
+
+# ==== MODE 1 : Authentification par API Token (recommandé pour exécution à distance) ====
+pm_api_token_id     = "root@pam!VOTRE-TOKEN"
+pm_api_token_secret = "VOTRE-SECRET"
+
+# ==== MODE 2 : Authentification par mot de passe (pour exécution locale sur Proxmox) ====
+# Décommentez les lignes suivantes et commentez les lignes API Token ci-dessus
+# pm_api_url = "https://localhost:8006/api2/json"
+# pm_user     = "root@pam"
+# pm_password = "VOTRE-MOT-DE-PASSE"
+# pm_api_token_id     = ""
+# pm_api_token_secret = ""
+
+# Configuration de base
+vm_name       = "PREFIX"
+target_node   = "proxmox"
+template_name = "debian-12-standard_12.12-1_amd64.tar.zst"
+vm_storage    = "local-lvm"
+
+# Cloud-init
+ci_user     = "votre-user"
+ci_password = "votre-password"
+ssh_keys    = "VOTRE-CLE-SSH-PUBLIQUE"
+
+# Définition des VMs à créer
+vms = {
+  "web" = {
+    cores     = 2
+    memory    = 2048
+    disk_size = "10G"
+    playbook  = "install_apache.yml"
+  }
+  "glpi" = {
+    cores     = 2
+    memory    = 4096
+    disk_size = "20G"
+    playbook  = "install_glpi.yml"
+  }
+}

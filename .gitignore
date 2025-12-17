@@ -1,0 +1,23 @@
+# Environment variables (sensible)
+.env.local
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.*
+terraform/terraform.tfvars
+
+# SSH Keys (sensible)
+ssh/id_ed25519_terraform
+ssh/id_ed25519_terraform.pub
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

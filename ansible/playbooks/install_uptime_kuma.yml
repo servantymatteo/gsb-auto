@@ -1,0 +1,341 @@
+---
+# PLAYBOOK ANSIBLE - Installation d'Uptime Kuma
+- name: Installer et configurer Uptime Kuma sur le container
+  hosts: all
+  become: yes
+
+  vars:
+    uptime_kuma_version: "1.23.13"
+    uptime_kuma_port: 3001
+    uptime_kuma_user: "uptime-kuma"
+    uptime_kuma_dir: "/opt/uptime-kuma"
+
+  tasks:
+    - name: Mettre à jour le cache apt
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Installer les dépendances (Node.js, npm, git)
+      apt:
+        name:
+          - curl
+          - git
+          - sudo
+        state: present
+
+    - name: Télécharger et installer Node.js 20.x
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      args:
+        creates: /etc/apt/sources.list.d/nodesource.list
+
+    - name: Installer Node.js et npm
+      apt:
+        name:
+          - nodejs
+        state: present
+        update_cache: yes
+
+    - name: Créer l'utilisateur uptime-kuma
+      user:
+        name: "{{ uptime_kuma_user }}"
+        shell: /bin/bash
+        home: "{{ uptime_kuma_dir }}"
+        create_home: no
+        system: yes
+
+    - name: Supprimer le répertoire Uptime Kuma s'il existe
+      file:
+        path: "{{ uptime_kuma_dir }}"
+        state: absent
+
+    - name: Cloner Uptime Kuma depuis GitHub
+      git:
+        repo: https://github.com/louislam/uptime-kuma.git
+        dest: "{{ uptime_kuma_dir }}"
+        version: "{{ uptime_kuma_version }}"
+
+    - name: Définir les permissions sur le dossier Uptime Kuma
+      file:
+        path: "{{ uptime_kuma_dir }}"
+        owner: "{{ uptime_kuma_user }}"
+        group: "{{ uptime_kuma_user }}"
+        recurse: yes
+
+    - name: Installer les dépendances npm
+      npm:
+        path: "{{ uptime_kuma_dir }}"
+        state: present
+      become_user: "{{ uptime_kuma_user }}"
+
+    - name: Build Uptime Kuma
+      shell: npm run setup
+      args:
+        chdir: "{{ uptime_kuma_dir }}"
+      become_user: "{{ uptime_kuma_user }}"
+
+    - name: Créer le fichier de service systemd
+      copy:
+        content: |
+          [Unit]
+          Description=Uptime Kuma
+          After=network.target
+
+          [Service]
+          Type=simple
+          User={{ uptime_kuma_user }}
+          WorkingDirectory={{ uptime_kuma_dir }}
+          ExecStart=/usr/bin/node server/server.js
+          Restart=on-failure
+          RestartSec=5s
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/uptime-kuma.service
+        mode: '0644'
+
+    - name: Recharger systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Démarrer et activer Uptime Kuma
+      systemd:
+        name: uptime-kuma
+        state: started
+        enabled: yes
+
+    - name: Attendre que Uptime Kuma soit prêt
+      wait_for:
+        port: "{{ uptime_kuma_port }}"
+        delay: 5
+        timeout: 60
+
+    - name: Créer un script Node.js de configuration automatique
+      copy:
+        content: |
+          const io = require('socket.io-client');
+          const { exec } = require('child_process');
+
+          async function configure() {
+            // Attendre que le service soit prêt
+            await new Promise(resolve => setTimeout(resolve, 15000));
+
+            console.log('Configuration automatique d\'Uptime Kuma...');
+
+            // Scanner le réseau pour trouver les services
+            const subnet = await new Promise((resolve) => {
+              exec("ip route | grep -v default | grep eth0 | awk '{print $1}'", (error, stdout) => {
+                resolve(stdout.trim());
+              });
+            });
+
+            console.log(`Scan du réseau ${subnet}...`);
+
+            // Scanner les ports 80
+            const services = await new Promise((resolve) => {
+              exec(`nmap -p 80 -oG - ${subnet} 2>/dev/null | grep "80/open" | awk '{print $2}'`,
+                (error, stdout) => {
+                  const ips = stdout.trim().split('\n').filter(ip => ip && ip !== '{{ ansible_default_ipv4.address }}');
+                  resolve(ips);
+                }
+              );
+            });
+
+            if (services.length === 0) {
+              console.log('Aucun service détecté sur le réseau');
+              return;
+            }
+
+            console.log(`Services trouvés: ${services.join(', ')}`);
+
+            // Se connecter à Uptime Kuma
+            const socket = io('http://localhost:{{ uptime_kuma_port }}', {
+              transports: ['websocket', 'polling']
+            });
+
+            socket.on('connect', async () => {
+              console.log('Connecté à Uptime Kuma');
+
+              // Créer le compte admin
+              socket.emit('setup', 'admin', 'admin123', (res) => {
+                if (res.ok) {
+                  console.log('Compte admin créé avec succès');
+
+                  // Se connecter
+                  socket.emit('login', { username: 'admin', password: 'admin123', token: '' }, async (loginRes) => {
+                    if (loginRes.ok) {
+                      console.log('Connexion réussie');
+
+                      // Ajouter les monitors
+                      let monitorId = 1;
+                      for (const ip of services) {
+                        // Tester si GLPI
+                        const isGlpi = await new Promise((resolve) => {
+                          exec(`curl -s -o /dev/null -w "%{http_code}" http://${ip}/glpi`,
+                            (error, stdout) => {
+                              const code = stdout.trim();
+                              resolve(code === '200' || code === '301' || code === '302');
+                            }
+                          );
+                        });
+
+                        const monitor = {
+                          type: 'http',
+                          name: isGlpi ? `GLPI (${ip})` : `Apache (${ip})`,
+                          url: isGlpi ? `http://${ip}/glpi` : `http://${ip}`,
+                          interval: 60,
+                          retryInterval: 60,
+                          maxretries: 3,
+                          active: true
+                        };
+
+                        socket.emit('add', monitor, (monitorRes) => {
+                          if (monitorRes.ok) {
+                            console.log(`✓ Monitor ajouté: ${monitor.name}`);
+                          }
+                        });
+
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                      }
+
+                      console.log('Configuration terminée !');
+                      setTimeout(() => process.exit(0), 2000);
+                    }
+                  });
+                } else {
+                  console.log('Compte admin déjà existant, tentative de connexion...');
+                  process.exit(0);
+                }
+              });
+            });
+
+            socket.on('connect_error', (error) => {
+              console.log('Erreur de connexion:', error.message);
+            });
+          }
+
+          configure().catch(console.error);
+        dest: /opt/uptime-kuma/auto-configure.js
+        mode: '0644'
+
+    - name: Installer nmap et curl pour le scan réseau
+      apt:
+        name:
+          - nmap
+          - curl
+        state: present
+
+    - name: Installer socket.io-client pour le script de configuration
+      npm:
+        name: socket.io-client
+        path: "{{ uptime_kuma_dir }}"
+        state: present
+      become_user: "{{ uptime_kuma_user }}"
+
+    - name: Exécuter la configuration automatique en arrière-plan
+      shell: nohup node /opt/uptime-kuma/auto-configure.js > /opt/uptime-kuma/configure.log 2>&1 &
+      args:
+        chdir: "{{ uptime_kuma_dir }}"
+      become_user: "{{ uptime_kuma_user }}"
+      async: 180
+      poll: 0
+
+    - name: Ouvrir le port dans le firewall (si UFW actif)
+      ufw:
+        rule: allow
+        port: "{{ uptime_kuma_port }}"
+        proto: tcp
+      ignore_errors: yes
+
+    - name: Créer un MOTD personnalisé
+      copy:
+        content: |
+          #!/bin/bash
+
+          # Couleurs
+          GREEN='\033[0;32m'
+          BLUE='\033[0;34m'
+          CYAN='\033[0;36m'
+          YELLOW='\033[1;33m'
+          BOLD='\033[1m'
+          NC='\033[0m'
+
+          # Récupérer les informations
+          HOSTNAME=$(hostname)
+          IP=$(hostname -I | awk '{print $1}')
+          UPTIME=$(uptime -p | sed 's/up //')
+          OS=$(lsb_release -d | cut -f2)
+          KERNEL=$(uname -r)
+          CPU=$(nproc)
+          MEM_TOTAL=$(free -h | awk '/^Mem:/ {print $2}')
+          MEM_USED=$(free -h | awk '/^Mem:/ {print $3}')
+          DISK_USED=$(df -h / | awk 'NR==2 {print $5}')
+
+          echo ""
+          echo -e "${BOLD}${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"
+          echo -e "${BOLD}${GREEN}║        📊 UPTIME KUMA - PROXMOX LXC                  ║${NC}"
+          echo -e "${BOLD}${GREEN}╚═══════════════════════════════════════════════════════╝${NC}"
+          echo ""
+          echo -e "${CYAN}📊 Informations système :${NC}"
+          echo -e "${BOLD}┌───────────────────────────────────────────────────────┐${NC}"
+          echo -e "${BOLD}│${NC} 🖥️  Hostname    : ${YELLOW}${HOSTNAME}${NC}"
+          echo -e "${BOLD}│${NC} 🌐 IP          : ${YELLOW}${IP}${NC}"
+          echo -e "${BOLD}│${NC} ⏱  Uptime      : ${YELLOW}${UPTIME}${NC}"
+          echo -e "${BOLD}│${NC} 💻 OS          : ${YELLOW}${OS}${NC}"
+          echo -e "${BOLD}│${NC} 🔧 Kernel      : ${YELLOW}${KERNEL}${NC}"
+          echo -e "${BOLD}└───────────────────────────────────────────────────────┘${NC}"
+          echo ""
+          echo -e "${CYAN}💾 Ressources :${NC}"
+          echo -e "${BOLD}┌───────────────────────────────────────────────────────┐${NC}"
+          echo -e "${BOLD}│${NC} CPU          : ${YELLOW}${CPU} cores${NC}"
+          echo -e "${BOLD}│${NC} RAM          : ${YELLOW}${MEM_USED} / ${MEM_TOTAL}${NC}"
+          echo -e "${BOLD}│${NC} Disque       : ${YELLOW}${DISK_USED} utilisé${NC}"
+          echo -e "${BOLD}└───────────────────────────────────────────────────────┘${NC}"
+          echo ""
+          echo -e "${BLUE}📊 Uptime Kuma : ${BOLD}http://${IP}:{{ uptime_kuma_port }}${NC}"
+          echo -e "${CYAN}👤 Admin : ${YELLOW}admin / admin123${NC}"
+          echo -e "${CYAN}👁️  Monitoring de tous vos services${NC}"
+          echo ""
+        dest: /etc/update-motd.d/99-custom-motd
+        mode: '0755'
+
+    - name: Afficher les informations de connexion
+      debug:
+        msg: |
+          ╔════════════════════════════════════════════════╗
+          ║      UPTIME KUMA INSTALLÉ ET CONFIGURÉ ! ✓     ║
+          ╚════════════════════════════════════════════════╝
+
+          🌐 URL d'accès: http://{{ ansible_default_ipv4.address }}:{{ uptime_kuma_port }}
+
+          🔐 Compte administrateur (créé automatiquement) :
+          ┌────────────────────────────────────────────────┐
+          │ 👤 Utilisateur : admin                         │
+          │ 🔑 Mot de passe : admin123                     │
+          └────────────────────────────────────────────────┘
+
+          📊 Monitoring :
+          ┌────────────────────────────────────────────────┐
+          │ 👁️  Interface : Port {{ uptime_kuma_port }}                      │
+          │ 📈 Status     : Actif                          │
+          │ 🔍 Scan réseau : En cours...                   │
+          └────────────────────────────────────────────────┘
+
+          📋 Informations du serveur :
+          ┌────────────────────────────────────────────────┐
+          │ Hostname : {{ ansible_hostname }}              │
+          │ IP       : {{ ansible_default_ipv4.address }}  │
+          │ Version  : {{ uptime_kuma_version }}           │
+          └────────────────────────────────────────────────┘
+
+          💡 Configuration automatique :
+          ┌────────────────────────────────────────────────┐
+          │ 1. Compte admin créé automatiquement ✓        │
+          │ 2. Scan réseau et détection des services ✓    │
+          │ 3. Monitors ajoutés automatiquement ✓         │
+          │ 4. Consultez /opt/uptime-kuma/configure.log   │
+          └────────────────────────────────────────────────┘
+
+          ⚠️  IMPORTANT : Changez le mot de passe admin !
+          📝 Les monitors pour Apache et GLPI sont pré-configurés

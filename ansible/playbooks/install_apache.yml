@@ -1,0 +1,183 @@
+---
+# PLAYBOOK ANSIBLE - Installation d'Apache
+# Un playbook = une liste de "plays" (tâches à exécuter)
+
+- name: Installer et configurer Apache sur le container
+  # "name" = description de ce que fait ce play
+
+  hosts: all
+  # "hosts: all" = exécute sur tous les hôtes dans l'inventaire
+  # Terraform passera l'IP du container créé comme inventaire
+
+  become: yes
+  # "become: yes" = utilise sudo (exécute en tant que root)
+  # Nécessaire pour installer des paquets
+
+  tasks:
+    # "tasks" = liste des tâches à exécuter dans l'ordre
+
+    - name: S'assurer que SSH est installé et actif
+      # Première tâche : vérifier que SSH fonctionne
+      apt:
+        # Module "apt" = gère les paquets Debian/Ubuntu
+        name: openssh-server
+        # Nom du paquet à installer
+        state: present
+        # "present" = s'assurer que le paquet est installé
+        # Si déjà installé, ne fait rien
+
+    - name: Mettre à jour le cache apt
+      # Équivalent de : apt-get update
+      apt:
+        update_cache: yes
+        # Télécharge la liste des paquets disponibles
+        cache_valid_time: 3600
+        # Cache valide pendant 3600 secondes (1h)
+        # Si mis à jour il y a moins d'1h, ne refait pas l'update
+
+    - name: Installer Apache2
+      # Installation du serveur web Apache
+      apt:
+        name: apache2
+        # Nom du paquet Apache
+        state: present
+        # S'assurer qu'il est installé
+
+    - name: Démarrer et activer Apache
+      # Démarre Apache maintenant ET au démarrage du système
+      systemd:
+        # Module "systemd" = gère les services systemd
+        name: apache2
+        # Nom du service
+        state: started
+        # "started" = démarre le service s'il n'est pas démarré
+        enabled: yes
+        # "enabled: yes" = démarre automatiquement au boot
+
+    - name: Créer une page d'accueil personnalisée
+      # Remplace la page par défaut d'Apache
+      copy:
+        # Module "copy" = copie du contenu vers un fichier
+        content: |
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Container {{ ansible_hostname }}</title>
+              <style>
+                  body {
+                      font-family: Arial, sans-serif;
+                      margin: 50px;
+                      background: #f0f0f0;
+                  }
+                  .container {
+                      background: white;
+                      padding: 30px;
+                      border-radius: 10px;
+                      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                  }
+                  h1 { color: #0066cc; }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <h1>🚀 Bienvenue sur le serveur Apache</h1>
+                  <p><strong>Hostname:</strong> {{ ansible_hostname }}</p>
+                  <p><strong>IP:</strong> {{ ansible_default_ipv4.address }}</p>
+                  <p><strong>OS:</strong> {{ ansible_distribution }} {{ ansible_distribution_version }}</p>
+                  <hr>
+                  <p>✅ Déployé automatiquement avec <strong>Terraform</strong> + <strong>Ansible</strong></p>
+              </div>
+          </body>
+          </html>
+        # Le contenu HTML ci-dessus sera écrit dans le fichier
+        # {{ ansible_hostname }}, etc. = variables Ansible (facts)
+        # Ansible collecte automatiquement ces infos sur l'hôte
+        dest: /var/www/html/index.html
+        # Chemin de destination du fichier
+        # C'est la page par défaut d'Apache
+
+    - name: Ouvrir le port 80 dans le firewall (si UFW actif)
+      # Optionnel : ouvre le port HTTP si un firewall est actif
+      ufw:
+        rule: allow
+        port: '80'
+        proto: tcp
+      ignore_errors: yes
+      # "ignore_errors: yes" = continue même si UFW n'est pas installé
+
+    - name: Créer un MOTD personnalisé
+      copy:
+        content: |
+          #!/bin/bash
+
+          # Couleurs
+          GREEN='\033[0;32m'
+          BLUE='\033[0;34m'
+          CYAN='\033[0;36m'
+          YELLOW='\033[1;33m'
+          BOLD='\033[1m'
+          NC='\033[0m'
+
+          # Récupérer les informations
+          HOSTNAME=$(hostname)
+          IP=$(hostname -I | awk '{print $1}')
+          UPTIME=$(uptime -p | sed 's/up //')
+          OS=$(lsb_release -d | cut -f2)
+          KERNEL=$(uname -r)
+          CPU=$(nproc)
+          MEM_TOTAL=$(free -h | awk '/^Mem:/ {print $2}')
+          MEM_USED=$(free -h | awk '/^Mem:/ {print $3}')
+          DISK_USED=$(df -h / | awk 'NR==2 {print $5}')
+
+          echo ""
+          echo -e "${BOLD}${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"
+          echo -e "${BOLD}${GREEN}║           🚀 SERVEUR APACHE - PROXMOX LXC            ║${NC}"
+          echo -e "${BOLD}${GREEN}╚═══════════════════════════════════════════════════════╝${NC}"
+          echo ""
+          echo -e "${CYAN}📊 Informations système :${NC}"
+          echo -e "${BOLD}┌───────────────────────────────────────────────────────┐${NC}"
+          echo -e "${BOLD}│${NC} 🖥️  Hostname    : ${YELLOW}${HOSTNAME}${NC}"
+          echo -e "${BOLD}│${NC} 🌐 IP          : ${YELLOW}${IP}${NC}"
+          echo -e "${BOLD}│${NC} ⏱  Uptime      : ${YELLOW}${UPTIME}${NC}"
+          echo -e "${BOLD}│${NC} 💻 OS          : ${YELLOW}${OS}${NC}"
+          echo -e "${BOLD}│${NC} 🔧 Kernel      : ${YELLOW}${KERNEL}${NC}"
+          echo -e "${BOLD}└───────────────────────────────────────────────────────┘${NC}"
+          echo ""
+          echo -e "${CYAN}💾 Ressources :${NC}"
+          echo -e "${BOLD}┌───────────────────────────────────────────────────────┐${NC}"
+          echo -e "${BOLD}│${NC} CPU          : ${YELLOW}${CPU} cores${NC}"
+          echo -e "${BOLD}│${NC} RAM          : ${YELLOW}${MEM_USED} / ${MEM_TOTAL}${NC}"
+          echo -e "${BOLD}│${NC} Disque       : ${YELLOW}${DISK_USED} utilisé${NC}"
+          echo -e "${BOLD}└───────────────────────────────────────────────────────┘${NC}"
+          echo ""
+          echo -e "${BLUE}🌐 Accès web : ${BOLD}http://${IP}${NC}"
+          echo ""
+        dest: /etc/update-motd.d/99-custom-motd
+        mode: '0755'
+
+    - name: Vérifier le statut d'Apache
+      # Vérifie qu'Apache fonctionne correctement
+      systemd:
+        name: apache2
+        state: started
+      register: apache_status
+      # "register" = sauvegarde le résultat dans une variable
+
+    - name: Afficher les informations de connexion
+      debug:
+        msg: |
+          ╔════════════════════════════════════════════════╗
+          ║         APACHE INSTALLÉ ET CONFIGURÉ ! ✓       ║
+          ╚════════════════════════════════════════════════╝
+
+          🌐 URL d'accès: http://{{ ansible_default_ipv4.address }}
+
+          📋 Informations du serveur :
+          ┌─────────────────────────────────────────┐
+          │ Hostname  : {{ ansible_hostname }}
+          │ IP        : {{ ansible_default_ipv4.address }}
+          │ OS        : {{ ansible_distribution }} {{ ansible_distribution_version }}
+          │ Statut    : {{ 'Actif ✓' if apache_status.status.ActiveState == 'active' else 'Inactif ✗' }}
+          └─────────────────────────────────────────┘
+
+          💡 Page personnalisée créée automatiquement
