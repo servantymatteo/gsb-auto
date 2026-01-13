@@ -3,10 +3,11 @@
 
 # Terraform
 terraform/.terraform/
-terraform/.terraform.lock.hcl
 terraform/terraform.tfstate
 terraform/terraform.tfstate.*
 terraform/terraform.tfvars
+*.tfstate
+*.tfstate.*
 
 # SSH Keys (sensible)
 ssh/id_ed25519_terraform
@@ -21,3 +22,16 @@ ssh/id_ed25519_terraform.pub
 
 # Logs
 *.log
+
+# Terraform generated files
+terraform/autounattend.iso
+
+# Ansible
+*.retry
+ansible/*.retry
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python

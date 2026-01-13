@@ -73,6 +73,14 @@ SERVICE_NAMES[3]="Uptime Kuma (monitoring)"
 SERVICE_PLAYBOOKS[3]="install_uptime_kuma.yml"
 SERVICE_DEFAULTS[3]="monitoring|2|2048|15G"
 
+SERVICE_NAMES[4]="AdGuard Home (bloqueur DNS)"
+SERVICE_PLAYBOOKS[4]="install_adguard.yml"
+SERVICE_DEFAULTS[4]="adguard|1|1024|8G"
+
+SERVICE_NAMES[5]="Active Directory (contrôleur de domaine Windows)"
+SERVICE_PLAYBOOKS[5]="install_ad_ds.yml"
+SERVICE_DEFAULTS[5]="dc|4|4096|60G"
+
 # Afficher les services disponibles
 echo -e "${BOLD}${MAGENTA}━━━ Services disponibles ━━━${NC}"
 echo ""
@@ -159,6 +167,10 @@ ci_user     = "$CI_USER"
 ci_password = "$CI_PASSWORD"
 ssh_keys    = "$SSH_KEYS"
 
+# Configuration Windows
+windows_template_id    = "${WINDOWS_TEMPLATE_ID:-WSERVER-TEMPLATE}"
+windows_admin_password = "${WINDOWS_ADMIN_PASSWORD:-Admin123@}"
+
 # Définition des VMs à créer
 vms = {
 EOF
@@ -212,6 +224,14 @@ for i in "${!VM_NAMES[@]}"; do
         SERVICE_ICON="📊"
         SERVICE_NAME="Uptime Kuma"
         SERVICE_INFO="Monitoring de services"
+    elif [[ "$playbook" == "install_adguard.yml" ]]; then
+        SERVICE_ICON="🛡️"
+        SERVICE_NAME="AdGuard Home"
+        SERVICE_INFO="Bloqueur de publicités DNS"
+    elif [[ "$playbook" == "install_ad_ds.yml" ]]; then
+        SERVICE_ICON="🏢"
+        SERVICE_NAME="Active Directory"
+        SERVICE_INFO="Contrôleur de domaine gsb.local (Windows Server)"
     else
         SERVICE_ICON="🌐"
         SERVICE_NAME="Web"
@@ -263,10 +283,49 @@ if [[ "$launch" == "o" || "$launch" == "O" ]]; then
             vm_name="${VM_NAMES[$i]}"
             IFS='|' read -r cores memory disk playbook <<< "${VM_CONFIGS[$i]}"
 
-            # Récupérer l'IP du container depuis Terraform
-            cd terraform
-            CONTAINER_IP=$(terraform state show "proxmox_lxc.container[\"$vm_name\"]" 2>/dev/null | grep "ipv4_addresses" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1)
-            cd ..
+            # Récupérer l'IP depuis l'API Proxmox (LXC ou QEMU selon le type)
+            FULL_CONTAINER_NAME="$VM_PREFIX-$vm_name"
+            API_BASE_URL="${PROXMOX_API_URL%/api2/json}"
+            CONTAINER_IP=""
+
+            # Déterminer si c'est un container LXC ou une VM QEMU
+            if [[ "$playbook" == "install_ad_ds.yml" ]]; then
+                # VM QEMU (Windows)
+                RESPONSE=$(curl -k -s -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+                  "$API_BASE_URL/api2/json/nodes/${TARGET_NODE}/qemu" 2>/dev/null)
+
+                VMID=$(echo "$RESPONSE" | grep -oE "\{[^}]*\"name\"[[:space:]]*:[[:space:]]*\"$FULL_CONTAINER_NAME\"[^}]*\}" | \
+                  grep -oE "\"vmid\"[[:space:]]*:[[:space:]]*\"?[0-9]+\"?" | grep -oE "[0-9]+" | sort -n | tail -1)
+
+                # Pour QEMU, essayer de récupérer l'IP via l'agent
+                if [[ -n "$VMID" ]]; then
+                    for attempt in {1..10}; do
+                        AGENT_RESPONSE=$(curl -k -s -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+                          "$API_BASE_URL/api2/json/nodes/${TARGET_NODE}/qemu/$VMID/agent/network-get-interfaces" 2>/dev/null)
+                        CONTAINER_IP=$(echo "$AGENT_RESPONSE" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v "127.0.0.1" | head -1)
+                        [[ -n "$CONTAINER_IP" ]] && break
+                        sleep 5
+                    done
+                fi
+            else
+                # Container LXC (Linux)
+                RESPONSE=$(curl -k -s -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+                  "$API_BASE_URL/api2/json/nodes/${TARGET_NODE}/lxc" 2>/dev/null)
+
+                VMID=$(echo "$RESPONSE" | grep -oE "\{[^}]*\"name\"[[:space:]]*:[[:space:]]*\"$FULL_CONTAINER_NAME\"[^}]*\}" | \
+                  grep -oE "\"vmid\"[[:space:]]*:[[:space:]]*\"?[0-9]+\"?" | grep -oE "[0-9]+" | sort -n | tail -1)
+
+                # Récupérer l'IP du container LXC
+                if [[ -n "$VMID" ]]; then
+                    for attempt in {1..5}; do
+                        NETWORK_RESPONSE=$(curl -k -s -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+                          "$API_BASE_URL/api2/json/nodes/${TARGET_NODE}/lxc/$VMID/interfaces" 2>/dev/null)
+                        CONTAINER_IP=$(echo "$NETWORK_RESPONSE" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v "127.0.0.1" | head -1)
+                        [[ -n "$CONTAINER_IP" ]] && break
+                        sleep 2
+                    done
+                fi
+            fi
 
             # Déterminer l'URL en fonction du service
             if [[ "$playbook" == "install_apache.yml" ]]; then
@@ -282,6 +341,17 @@ if [[ "$launch" == "o" || "$launch" == "O" ]]; then
                 SERVICE_URL="http://${CONTAINER_IP}:3001"
                 SERVICE_ICON="📊"
                 SERVICE_NAME="Uptime Kuma"
+                CREDENTIALS="${YELLOW}admin / admin123${NC}"
+            elif [[ "$playbook" == "install_adguard.yml" ]]; then
+                SERVICE_URL="http://${CONTAINER_IP}:3000"
+                SERVICE_ICON="🛡️"
+                SERVICE_NAME="AdGuard Home"
+                CREDENTIALS="${YELLOW}admin / admin123${NC} | DNS: ${YELLOW}${CONTAINER_IP}:53${NC}"
+            elif [[ "$playbook" == "install_ad_ds.yml" ]]; then
+                SERVICE_URL="RDP: ${CONTAINER_IP}:3389"
+                SERVICE_ICON="🏢"
+                SERVICE_NAME="Active Directory"
+                CREDENTIALS="${YELLOW}Administrator / Admin123@${NC} | Domaine: ${YELLOW}gsb.local${NC}"
             else
                 SERVICE_URL="http://${CONTAINER_IP}"
                 SERVICE_ICON="🌐"

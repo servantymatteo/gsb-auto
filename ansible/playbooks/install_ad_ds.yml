@@ -1,0 +1,181 @@
+---
+# PLAYBOOK ANSIBLE - Installation et configuration Active Directory Domain Services
+- name: Installer et configurer Active Directory sur Windows Server
+  hosts: all
+  gather_facts: yes
+
+  vars:
+    domain_name: "gsb.local"
+    domain_netbios: "GSB"
+    safe_mode_password: "SafeMode123@"
+    dns_forwarders:
+      - "8.8.8.8"
+      - "8.8.4.4"
+
+  tasks:
+    - name: Attendre que WinRM soit disponible
+      wait_for_connection:
+        timeout: 300
+        delay: 10
+
+    - name: Installer le rôle AD DS
+      win_feature:
+        name:
+          - AD-Domain-Services
+          - RSAT-ADDS
+          - DNS
+        include_management_tools: yes
+        state: present
+      register: adds_install
+
+    - name: Redémarrer si nécessaire après installation AD DS
+      win_reboot:
+        msg: "Redémarrage après installation AD DS"
+        pre_reboot_delay: 10
+      when: adds_install.reboot_required
+
+    - name: Promouvoir le serveur en contrôleur de domaine
+      win_domain:
+        dns_domain_name: "{{ domain_name }}"
+        domain_netbios_name: "{{ domain_netbios }}"
+        safe_mode_password: "{{ safe_mode_password }}"
+        create_dns_delegation: no
+        database_path: "C:\\Windows\\NTDS"
+        sysvol_path: "C:\\Windows\\SYSVOL"
+        install_dns: yes
+      register: domain_install
+
+    - name: Redémarrer après promotion DC
+      win_reboot:
+        msg: "Redémarrage après promotion en contrôleur de domaine"
+        pre_reboot_delay: 10
+        post_reboot_delay: 60
+      when: domain_install.reboot_required
+
+    - name: Attendre que le domaine soit opérationnel
+      win_wait_for:
+        timeout: 300
+        delay: 30
+
+    - name: Configurer les redirecteurs DNS
+      win_shell: |
+        Add-DnsServerForwarder -IPAddress {{ dns_forwarders | join(',') }} -PassThru
+      ignore_errors: yes
+
+    - name: Créer une OU pour les utilisateurs
+      win_domain_ou:
+        name: Utilisateurs_GSB
+        path: "DC=gsb,DC=local"
+        state: present
+      ignore_errors: yes
+
+    - name: Créer une OU pour les ordinateurs
+      win_domain_ou:
+        name: Ordinateurs_GSB
+        path: "DC=gsb,DC=local"
+        state: present
+      ignore_errors: yes
+
+    - name: Créer une OU pour les serveurs
+      win_domain_ou:
+        name: Serveurs_GSB
+        path: "DC=gsb,DC=local"
+        state: present
+      ignore_errors: yes
+
+    - name: Créer un groupe d'administrateurs GSB
+      win_domain_group:
+        name: Admins_GSB
+        scope: global
+        category: security
+        organizational_unit: "OU=Utilisateurs_GSB,DC=gsb,DC=local"
+        state: present
+      ignore_errors: yes
+
+    - name: Créer un utilisateur administrateur de test
+      win_domain_user:
+        name: admin.gsb
+        firstname: Admin
+        surname: GSB
+        password: "Admin123@"
+        state: present
+        path: "OU=Utilisateurs_GSB,DC=gsb,DC=local"
+        groups:
+          - Domain Admins
+          - Admins_GSB
+        password_never_expires: yes
+        user_cannot_change_password: no
+      ignore_errors: yes
+
+    - name: Créer des utilisateurs de test
+      win_domain_user:
+        name: "{{ item.name }}"
+        firstname: "{{ item.firstname }}"
+        surname: "{{ item.surname }}"
+        password: "User123@"
+        state: present
+        path: "OU=Utilisateurs_GSB,DC=gsb,DC=local"
+        password_never_expires: no
+        user_cannot_change_password: no
+      loop:
+        - { name: "user1.gsb", firstname: "Utilisateur", surname: "Un" }
+        - { name: "user2.gsb", firstname: "Utilisateur", surname: "Deux" }
+        - { name: "user3.gsb", firstname: "Utilisateur", surname: "Trois" }
+      ignore_errors: yes
+
+    - name: Afficher les informations de connexion
+      debug:
+        msg: |
+          ╔════════════════════════════════════════════════╗
+          ║    ACTIVE DIRECTORY INSTALLÉ ET CONFIGURÉ ! ✓  ║
+          ╚════════════════════════════════════════════════╝
+
+          🌐 Domaine : {{ domain_name }}
+          🏷️  NetBIOS : {{ domain_netbios }}
+
+          🔐 Compte Administrateur Principal :
+          ┌────────────────────────────────────────────────┐
+          │ 👤 Utilisateur : Administrator                 │
+          │ 🔑 Mot de passe : Admin123@                    │
+          └────────────────────────────────────────────────┘
+
+          🔐 Compte Administrateur de domaine :
+          ┌────────────────────────────────────────────────┐
+          │ 👤 Utilisateur : admin.gsb@{{ domain_name }}   │
+          │ 🔑 Mot de passe : Admin123@                    │
+          └────────────────────────────────────────────────┘
+
+          👥 Comptes utilisateurs de test créés :
+          ┌────────────────────────────────────────────────┐
+          │ • user1.gsb@{{ domain_name }} / User123@       │
+          │ • user2.gsb@{{ domain_name }} / User123@       │
+          │ • user3.gsb@{{ domain_name }} / User123@       │
+          └────────────────────────────────────────────────┘
+
+          📁 Unités d'organisation créées :
+          ┌────────────────────────────────────────────────┐
+          │ • OU=Utilisateurs_GSB,DC=gsb,DC=local          │
+          │ • OU=Ordinateurs_GSB,DC=gsb,DC=local           │
+          │ • OU=Serveurs_GSB,DC=gsb,DC=local              │
+          └────────────────────────────────────────────────┘
+
+          🌐 Serveurs DNS configurés : {{ dns_forwarders | join(', ') }}
+
+          📋 Informations du serveur :
+          ┌────────────────────────────────────────────────┐
+          │ Nom : {{ ansible_hostname }}                   │
+          │ IP  : {{ ansible_ip_addresses[0] }}            │
+          │ OS  : {{ ansible_os_family }} {{ ansible_distribution_version }} │
+          └────────────────────────────────────────────────┘
+
+          💡 Joindre un poste au domaine :
+          ┌────────────────────────────────────────────────┐
+          │ 1. Configurer le DNS : {{ ansible_ip_addresses[0] }}              │
+          │ 2. Joindre le domaine : {{ domain_name }}      │
+          │ 3. Utiliser : admin.gsb@{{ domain_name }}      │
+          └────────────────────────────────────────────────┘
+
+          ⚠️  IMPORTANT :
+          • Changez TOUS les mots de passe par défaut !
+          • Le mot de passe Safe Mode est : {{ safe_mode_password }}
+          • Sauvegardez les informations de récupération

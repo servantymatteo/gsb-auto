@@ -133,22 +133,37 @@
 
             console.log(`Scan du réseau ${subnet}...`);
 
-            // Scanner les ports 80
-            const services = await new Promise((resolve) => {
+            // Scanner les ports 80 et 3000
+            const services = [];
+
+            // Scanner port 80 (Apache/GLPI)
+            const port80 = await new Promise((resolve) => {
               exec(`nmap -p 80 -oG - ${subnet} 2>/dev/null | grep "80/open" | awk '{print $2}'`,
                 (error, stdout) => {
                   const ips = stdout.trim().split('\n').filter(ip => ip && ip !== '{{ ansible_default_ipv4.address }}');
-                  resolve(ips);
+                  resolve(ips.map(ip => ({ ip, port: 80 })));
                 }
               );
             });
+
+            // Scanner port 3000 (AdGuard)
+            const port3000 = await new Promise((resolve) => {
+              exec(`nmap -p 3000 -oG - ${subnet} 2>/dev/null | grep "3000/open" | awk '{print $2}'`,
+                (error, stdout) => {
+                  const ips = stdout.trim().split('\n').filter(ip => ip && ip !== '{{ ansible_default_ipv4.address }}');
+                  resolve(ips.map(ip => ({ ip, port: 3000 })));
+                }
+              );
+            });
+
+            services.push(...port80, ...port3000);
 
             if (services.length === 0) {
               console.log('Aucun service détecté sur le réseau');
               return;
             }
 
-            console.log(`Services trouvés: ${services.join(', ')}`);
+            console.log(`Services trouvés: ${services.map(s => `${s.ip}:${s.port}`).join(', ')}`);
 
             // Se connecter à Uptime Kuma
             const socket = io('http://localhost:{{ uptime_kuma_port }}', {
@@ -170,34 +185,51 @@
 
                       // Ajouter les monitors
                       let monitorId = 1;
-                      for (const ip of services) {
-                        // Tester si GLPI
-                        const isGlpi = await new Promise((resolve) => {
-                          exec(`curl -s -o /dev/null -w "%{http_code}" http://${ip}/glpi`,
-                            (error, stdout) => {
-                              const code = stdout.trim();
-                              resolve(code === '200' || code === '301' || code === '302');
+                      for (const service of services) {
+                        let monitor;
+
+                        if (service.port === 3000) {
+                          // AdGuard Home
+                          monitor = {
+                            type: 'http',
+                            name: `AdGuard Home (${service.ip})`,
+                            url: `http://${service.ip}:3000`,
+                            interval: 60,
+                            retryInterval: 60,
+                            maxretries: 3,
+                            active: true
+                          };
+                        } else if (service.port === 80) {
+                          // Tester si GLPI
+                          const isGlpi = await new Promise((resolve) => {
+                            exec(`curl -s -o /dev/null -w "%{http_code}" http://${service.ip}/glpi`,
+                              (error, stdout) => {
+                                const code = stdout.trim();
+                                resolve(code === '200' || code === '301' || code === '302');
+                              }
+                            );
+                          });
+
+                          monitor = {
+                            type: 'http',
+                            name: isGlpi ? `GLPI (${service.ip})` : `Apache (${service.ip})`,
+                            url: isGlpi ? `http://${service.ip}/glpi` : `http://${service.ip}`,
+                            interval: 60,
+                            retryInterval: 60,
+                            maxretries: 3,
+                            active: true
+                          };
+                        }
+
+                        if (monitor) {
+                          socket.emit('add', monitor, (monitorRes) => {
+                            if (monitorRes.ok) {
+                              console.log(`✓ Monitor ajouté: ${monitor.name}`);
                             }
-                          );
-                        });
+                          });
 
-                        const monitor = {
-                          type: 'http',
-                          name: isGlpi ? `GLPI (${ip})` : `Apache (${ip})`,
-                          url: isGlpi ? `http://${ip}/glpi` : `http://${ip}`,
-                          interval: 60,
-                          retryInterval: 60,
-                          maxretries: 3,
-                          active: true
-                        };
-
-                        socket.emit('add', monitor, (monitorRes) => {
-                          if (monitorRes.ok) {
-                            console.log(`✓ Monitor ajouté: ${monitor.name}`);
-                          }
-                        });
-
-                        await new Promise(resolve => setTimeout(resolve, 1000));
+                          await new Promise(resolve => setTimeout(resolve, 1000));
+                        }
                       }
 
                       console.log('Configuration terminée !');

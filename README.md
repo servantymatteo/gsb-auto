@@ -1,200 +1,259 @@
-# Déploiement automatique de containers Proxmox avec Terraform + Ansible
+# 🚀 Auto GSB - Déploiement automatique Proxmox
 
-Système automatisé pour créer et configurer des containers LXC sur Proxmox avec installation automatique de services via Ansible.
+Système automatisé pour créer et configurer des containers LXC et VMs sur Proxmox avec installation automatique de services via Terraform + Ansible.
 
-## Prérequis
+## 📋 Services disponibles
 
-- Terraform installé
-- Ansible installé
-- Accès à un serveur Proxmox avec API token
-- Clés SSH configurées
+| Service | Type | Description |
+|---------|------|-------------|
+| **Apache** | LXC | Serveur web HTTP |
+| **MySQL** | LXC | Base de données |
+| **Uptime Kuma** | LXC | Monitoring de services |
+| **Active Directory** | QEMU | Contrôleur de domaine Windows Server 2022 |
 
-## Configuration initiale
+## ⚡ Démarrage rapide
 
-### 1. Créer le fichier de configuration
-
-Copiez le fichier d'exemple et remplissez-le avec vos informations :
+### 1. Configurer l'accès Proxmox
 
 ```bash
 cp .env.local.example .env.local
 nano .env.local
 ```
 
-### 2. Remplir les informations d'API Proxmox
-
-Le fichier `.env.local` doit contenir :
-
+Remplir :
 ```bash
-# URL de l'API Proxmox
 PROXMOX_API_URL=https://192.168.68.200:8006/api2/json
-
-# API Token (voir section ci-dessous pour créer le token)
 PROXMOX_TOKEN_ID=root@pam!terraform
 PROXMOX_TOKEN_SECRET=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-
-# Configuration de base
 TARGET_NODE=proxmox
-TEMPLATE_NAME=debian-12-standard_12.12-1_amd64.tar.zst
-VM_STORAGE=local-lvm
-
-# Credentials par défaut des containers (Cloud-init)
-CI_USER=sio2027
-CI_PASSWORD=Formation13@
 ```
 
-### 3. Créer un token API dans Proxmox
+**Créer un token API** : Proxmox → Datacenter → Permissions → API Tokens → Add
 
-1. Connectez-vous à l'interface web Proxmox
-2. Datacenter → Permissions → API Tokens
-3. Cliquez sur "Add"
-4. Sélectionnez l'utilisateur (ex: root@pam)
-5. Donnez un nom au token (ex: terraform)
-6. **Important** : Copiez le token secret (il ne s'affichera qu'une seule fois !)
-7. Collez les valeurs dans votre fichier `.env.local`
-
-## Utilisation rapide
-
-### Méthode 1 : Script interactif (recommandé)
-
-Lancez simplement le script de configuration :
+### 2. Déployer des services
 
 ```bash
 ./setup.sh
 ```
 
-Le script vous demandera :
-1. Le préfixe des containers (ex: SIO2027)
-2. Quels services vous voulez installer (Apache, GLPI, etc.)
-3. Les ressources pour chaque container (CPU, RAM, disque)
-4. Si vous voulez lancer le déploiement immédiatement
+Le script vous guide étape par étape :
+1. Sélection des services à installer
+2. Configuration des ressources (CPU, RAM, Disque)
+3. Résumé et confirmation
+4. Déploiement automatique
 
-### Méthode 2 : Configuration manuelle
+### 3. Nettoyer
 
-Éditez `terraform/terraform.tfvars` et définissez vos VMs :
-
-```hcl
-vms = {
-  "web" = {
-    cores     = 2
-    memory    = 2048
-    disk_size = "10G"
-    playbook  = "install_apache.yml"
-  }
-  "glpi" = {
-    cores     = 2
-    memory    = 4096
-    disk_size = "20G"
-    playbook  = "install_glpi.yml"
-  }
-}
+```bash
+./cleanup.sh
 ```
 
-Puis lancez :
+Supprime tous les containers et VMs créés.
+
+## 🔧 Prérequis
+
+### Système local
+- Terraform >= 1.0
+- Ansible >= 2.9
+- PowerShell Core (pour Windows Server)
+- Python + pywinrm (pour Windows Server)
+
+```bash
+# macOS
+brew install terraform ansible pwsh
+pip3 install --break-system-packages pywinrm
+
+# Linux
+sudo apt install terraform ansible
+pip3 install pywinrm
+```
+
+### Proxmox
+- Proxmox VE >= 7.0
+- Template LXC Debian 12 téléchargé
+- ISO Windows Server (pour Active Directory)
+- API Token créé
+
+## 📁 Structure du projet
+
+```
+auto_gsb/
+├── README.md                    # Ce fichier
+├── setup.sh                     # Script principal
+├── cleanup.sh                   # Script de nettoyage
+│
+├── docs/                        # Documentation
+│   ├── WINDOWS-SETUP-GUIDE.md  # Guide Windows/AD (cloud-init)
+│   ├── windows-template-setup.md # Création template Windows
+│   ├── ARCHITECTURE.md          # Architecture du projet
+│   └── TROUBLESHOOTING.md       # Dépannage
+│
+├── scripts/                     # Scripts
+│   ├── provision.sh            # Provisioning Linux
+│   ├── provision_windows.ps1   # Provisioning Windows
+│   └── create_autounattend_iso.sh
+│
+├── terraform/                   # Infrastructure
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── outputs.tf
+│   └── autounattend.xml
+│
+├── ansible/                     # Configuration
+│   ├── ansible.cfg
+│   └── playbooks/
+│       ├── install_apache.yml
+│       ├── install_mysql.yml
+│       ├── install_uptime_kuma.yml
+│       └── install_ad_ds.yml
+│
+└── .env.local.example          # Template config
+```
+
+## 🐧 Services Linux (LXC)
+
+### Apache
+
+```bash
+./setup.sh
+# Sélectionner [1] Apache
+```
+
+**Accès** : `http://<IP_CONTAINER>`
+
+**Credentials** : `sio2027 / Formation13@`
+
+### MySQL
+
+```bash
+./setup.sh
+# Sélectionner [2] MySQL
+```
+
+**Accès** : `mysql -h <IP_CONTAINER> -u root -p`
+
+**Root password** : `rootpassword`
+
+### Uptime Kuma
+
+```bash
+./setup.sh
+# Sélectionner [4] Uptime Kuma
+```
+
+**Accès** : `http://<IP_CONTAINER>:3001`
+
+**Premier démarrage** : Créer un compte admin
+
+## 🪟 Windows Server / Active Directory
+
+Pour déployer Active Directory sur Windows Server 2022 avec cloud-init, consultez le guide complet :
+
+**📖 [docs/WINDOWS-SETUP-GUIDE.md](docs/WINDOWS-SETUP-GUIDE.md)**
+
+### Processus en 2 étapes :
+
+1. **Créer le template Windows** (une seule fois, ~45 min)
+   - Guide : [docs/windows-template-setup.md](docs/windows-template-setup.md)
+
+2. **Déployer avec Terraform** (5-10 min par VM)
+   ```bash
+   cd terraform
+   terraform apply
+   ```
+
+**Avantages** :
+- ✅ Déploiement en 5-10 min (vs 30-40 min avec ISO)
+- ✅ Configuration via cloud-init (comme les LXC)
+- ✅ Réutilisable pour toutes les VMs Windows
+- ✅ Installation AD DS automatique au premier boot
+
+**Domaine** : `gsb.local`
+**Admin** : `admin.gsb@gsb.local / Admin123@`
+
+## 🔍 Commandes utiles
+
+### Lister les ressources déployées
 
 ```bash
 cd terraform
-terraform init
-terraform apply --auto-approve
+terraform state list
 ```
 
-## Services disponibles
-
-- **Apache** : Serveur web avec page personnalisée
-  - Playbook : `ansible/playbooks/install_apache.yml`
-  - Ressources recommandées : 2 CPU, 2048 MB RAM, 10G disque
-
-- **GLPI** : Système de gestion de parc informatique et helpdesk
-  - Playbook : `ansible/playbooks/install_glpi.yml`
-  - Ressources recommandées : 2 CPU, 4096 MB RAM, 20G disque
-
-## Ajouter un nouveau service
-
-1. Créer un playbook Ansible dans `ansible/playbooks/` (ex: `install_monservice.yml`)
-2. Ajouter le service dans `setup.sh` :
+### Voir les détails d'une ressource
 
 ```bash
-SERVICE_NAMES[3]="Mon Service"
-SERVICE_PLAYBOOKS[3]="install_monservice.yml"
-SERVICE_DEFAULTS[3]="monservice|2|2048|10G"
+terraform state show proxmox_lxc.container[\"apache\"]
 ```
 
-3. Le service sera automatiquement disponible dans le menu
-
-## Structure du projet
-
-```
-.
-├── README.md                        # Documentation
-├── setup.sh                         # Script de configuration et déploiement
-├── cleanup.sh                       # Script de suppression des containers
-├── terraform/                       # Configuration Terraform
-│   ├── main.tf                      # Ressource LXC container
-│   ├── variables.tf                 # Définition des variables
-│   ├── provider.tf                  # Configuration provider Proxmox
-│   ├── outputs.tf                   # Outputs (IPs, hostnames)
-│   └── terraform.tfvars             # Valeurs (généré par setup.sh)
-├── ansible/                         # Configuration Ansible
-│   ├── ansible.cfg                  # Config Ansible (SSH, etc.)
-│   └── playbooks/                   # Playbooks d'installation
-│       ├── install_apache.yml       # Installation Apache
-│       └── install_glpi.yml         # Installation GLPI
-├── scripts/                         # Scripts utilitaires
-│   └── provision.sh                 # Provisionnement (appelé par Terraform)
-└── ssh/                             # Clés SSH
-    ├── id_ed25519_terraform         # Clé privée
-    └── id_ed25519_terraform.pub     # Clé publique
-```
-
-## Comment ça fonctionne
-
-1. **setup.sh** vous pose des questions et génère `terraform/terraform.tfvars`
-2. **Terraform** crée les containers LXC sur Proxmox
-3. **scripts/provision.sh** récupère les infos du container (VMID, IP)
-4. **Ansible** exécute le playbook depuis `ansible/playbooks/`
-5. Vous obtenez l'IP d'accès à la fin du déploiement
-
-## Commandes utiles
+### Accéder à un container
 
 ```bash
-# Configurer et déployer de nouvelles VMs (mode interactif)
-./setup.sh
-
-# Supprimer UNIQUEMENT les containers créés par ce système
-./cleanup.sh
-
-# Voir le plan sans appliquer
-cd terraform && terraform plan
-
-# Déployer manuellement
-cd terraform && terraform apply --auto-approve
-
-# Voir les outputs (IPs, hostnames)
-cd terraform && terraform output
+ssh -i ssh/id_ed25519_terraform root@<IP_CONTAINER>
 ```
 
-## Notes importantes
+### Relancer Ansible sur un container
 
-- Les provisioners Terraform ne s'exécutent que lors de la **création** du container
-- Si vous modifiez un playbook, il faut détruire et recréer le container
-- Les mots de passe par défaut de GLPI doivent être changés après installation
-- Les containers utilisent l'authentification SSH par clé (pas de mot de passe)
+```bash
+cd ansible
+ansible-playbook -i <IP>, -u root playbooks/install_apache.yml
+```
 
-## Dépannage
+## 🛠️ Dépannage
 
-**Erreur "SSH timeout"** :
-- Vérifiez que les clés SSH sont présentes dans `ssh/`
-- Vérifiez les permissions : `chmod 600 ssh/id_ed25519_terraform`
-- Augmentez le délai d'attente dans `scripts/provision.sh`
+Consultez le guide de dépannage complet :
 
-**Erreur "IP non trouvée"** :
-- Vérifiez que le container a bien démarré dans Proxmox
-- Vérifiez la configuration réseau (DHCP)
+**📖 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**
 
-**Ansible échoue** :
-- Vérifiez qu'Ansible est installé : `ansible-playbook --version`
-- Vérifiez que le playbook existe dans `ansible/playbooks/`
-- Vérifiez la config Ansible : `ansible/ansible.cfg`
+### Erreurs courantes
 
-**Erreur terraform "working directory"** :
-- Assurez-vous de lancer terraform depuis le dossier `terraform/`
-- Ou utilisez `./setup.sh` qui gère automatiquement les chemins
+**Terraform : "template not found"**
+```bash
+# Télécharger le template Debian 12 dans Proxmox
+# Storage → local → CT Templates → Download → debian-12-standard
+```
+
+**Ansible : "SSH connection failed"**
+```bash
+# Attendre quelques secondes que le container démarre
+# Vérifier la clé SSH
+ls -la ssh/id_ed25519_terraform*
+```
+
+**Windows : "WinRM connection failed"**
+```bash
+# Activer WinRM dans la VM Windows :
+Enable-PSRemoting -Force
+```
+
+## 📚 Documentation complète
+
+- **[docs/WINDOWS-SETUP-GUIDE.md](docs/WINDOWS-SETUP-GUIDE.md)** - Guide complet Windows Server et Active Directory (cloud-init)
+- **[docs/windows-template-setup.md](docs/windows-template-setup.md)** - Création du template Windows avec cloudbase-init
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Architecture et flux du projet
+- **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Dépannage et solutions aux erreurs
+
+## 🔐 Sécurité
+
+**⚠️ ATTENTION** : Cette configuration est pour **démonstration et apprentissage** uniquement !
+
+Pour la production :
+- ✅ Changer TOUS les mots de passe par défaut
+- ✅ Utiliser des clés SSH dédiées
+- ✅ Configurer le pare-feu
+- ✅ Activer HTTPS avec certificats valides
+- ✅ Limiter les accès réseau
+
+## 📄 Licence
+
+Projet éducatif - GSB Formation
+
+## 🤝 Contribution
+
+Ce projet est utilisé dans un cadre pédagogique. Pour toute question ou amélioration, contactez votre formateur.
+
+---
+
+**Auteur** : Formation SIO 2027
+**Version** : 2.0
+**Dernière mise à jour** : Décembre 2024

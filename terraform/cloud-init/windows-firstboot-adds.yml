@@ -1,0 +1,97 @@
+#cloud-config
+# Configuration cloud-init pour Windows Server - Installation AD DS
+# Ce fichier doit être uploadé sur Proxmox dans /var/lib/vz/snippets/
+
+# Activer WinRM pour Ansible
+runcmd:
+  - ps: Enable-PSRemoting -Force
+  - ps: Set-Item WSMan:\localhost\Service\Auth\Basic -Value $true
+  - ps: Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true
+  - ps: New-NetFirewallRule -Name 'WinRM-HTTP' -DisplayName 'WinRM HTTP' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 5985 -ErrorAction SilentlyContinue
+  - ps: Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue
+  - ps: |
+      # Script d'installation AD DS au premier boot
+      $LogFile = "C:\cloudinit-adds.log"
+      function Write-Log {
+          param([string]$Message)
+          $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+          "$timestamp - $Message" | Tee-Object -FilePath $LogFile -Append
+      }
+
+      Write-Log "===== DEBUT INSTALLATION AD DS VIA CLOUD-INIT ====="
+
+      # Configuration du domaine
+      $DomainName = "gsb.local"
+      $DomainNetBios = "GSB"
+      $SafeModePassword = ConvertTo-SecureString "SafeMode123@" -AsPlainText -Force
+
+      try {
+          # Vérifier si AD DS est déjà installé
+          $addsFeature = Get-WindowsFeature -Name AD-Domain-Services
+
+          if ($addsFeature.InstallState -ne "Installed") {
+              Write-Log "[1/2] Installation du rôle AD-Domain-Services..."
+              Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
+              Write-Log "  ✓ Rôle AD-Domain-Services installé"
+
+              # Créer un fichier marqueur pour indiquer qu'un redémarrage est nécessaire
+              New-Item -Path "C:\.adds-install-pending" -ItemType File -Force | Out-Null
+          }
+
+          # Vérifier si le serveur est déjà un DC
+          if ((Get-CimInstance -ClassName Win32_ComputerSystem).DomainRole -lt 4) {
+              Write-Log "[2/2] Promotion du serveur en contrôleur de domaine..."
+
+              Import-Module ADDSDeployment
+
+              # Créer une tâche planifiée pour la promotion après redémarrage
+              # (si nécessaire après l'installation de la fonctionnalité)
+              $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-ExecutionPolicy Bypass -WindowStyle Hidden -Command "Import-Module ADDSDeployment; Install-ADDSForest -DomainName ''gsb.local'' -DomainNetbiosName ''GSB'' -SafeModeAdministratorPassword (ConvertTo-SecureString ''SafeMode123@'' -AsPlainText -Force) -InstallDns:$true -CreateDnsDelegation:$false -DatabasePath ''C:\Windows\NTDS'' -LogPath ''C:\Windows\NTDS'' -SysvolPath ''C:\Windows\SYSVOL'' -NoRebootOnCompletion:$false -Force:$true"'
+              $trigger = New-ScheduledTaskTrigger -AtStartup
+              $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+              Register-ScheduledTask -TaskName "InstallADDS" -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+
+              Write-Log "  ✓ Tâche de promotion créée"
+              Write-Log "  → Redémarrage nécessaire pour compléter l'installation"
+
+              # Redémarrer maintenant si l'installation de la fonctionnalité est terminée
+              if (Test-Path "C:\.adds-install-pending") {
+                  Remove-Item "C:\.adds-install-pending" -Force
+                  Restart-Computer -Force
+              } else {
+                  # Lancer directement la promotion
+                  Install-ADDSForest `
+                      -DomainName $DomainName `
+                      -DomainNetbiosName $DomainNetBios `
+                      -SafeModeAdministratorPassword $SafeModePassword `
+                      -InstallDns:$true `
+                      -CreateDnsDelegation:$false `
+                      -DatabasePath "C:\Windows\NTDS" `
+                      -LogPath "C:\Windows\NTDS" `
+                      -SysvolPath "C:\Windows\SYSVOL" `
+                      -NoRebootOnCompletion:$false `
+                      -Force:$true
+              }
+          } else {
+              Write-Log "Le serveur est déjà un contrôleur de domaine"
+
+              # Supprimer la tâche de promotion si elle existe
+              Unregister-ScheduledTask -TaskName "InstallADDS" -Confirm:$false -ErrorAction SilentlyContinue
+
+              Write-Log "===== AD DS DEJA INSTALLE ====="
+          }
+      } catch {
+          Write-Log "ERREUR: $_"
+          Write-Log "ERREUR DETAILS: $($_.Exception.Message)"
+          Write-Log "===== INSTALLATION ECHOUEE ====="
+      }
+
+# Désactiver Windows Defender (optionnel, pour labs uniquement)
+# - ps: Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+
+# Configurer le fuseau horaire
+timezone: Romance Standard Time
+
+# Configuration du nom d'hôte (sera remplacé par le nom du DC)
+hostname: DC-GSB
