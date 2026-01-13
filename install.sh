@@ -30,7 +30,7 @@ success "Exécution sur le serveur Proxmox détectée"
 
 # Variables
 INSTALL_DIR="/root/auto_gsb"
-GITHUB_REPO="https://github.com/VOTRE_USERNAME/auto_gsb.git"  # À MODIFIER
+GITHUB_REPO="https://github.com/servantymatteo/gsb-auto.git"
 LXC_TEMPLATE_FILENAME="debian-12-standard_12.12-1_amd64.tar.zst"
 LXC_TEMPLATE="/var/lib/vz/template/cache/$LXC_TEMPLATE_FILENAME"
 LXC_TEMPLATE_URL="http://download.proxmox.com/images/system/$LXC_TEMPLATE_FILENAME"
@@ -80,7 +80,7 @@ if [ -d "$INSTALL_DIR" ]; then
     git pull
 else
     info "Clonage du repository depuis GitHub..."
-    git clone "$GITHUB_REPO" "$INSTALL_DIR"
+    git clone -b local "$GITHUB_REPO" "$INSTALL_DIR"
 fi
 
 cd "$INSTALL_DIR"
