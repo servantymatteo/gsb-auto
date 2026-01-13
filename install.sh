@@ -1,10 +1,5 @@
 #!/bin/bash
 
-# ============================================
-# Script d'installation auto_gsb sur Proxmox
-# Installation en une commande depuis GitHub
-# ============================================
-
 set -e
 
 # Couleurs
@@ -15,11 +10,9 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Fonctions
 success() { echo -e "${GREEN}✓ $1${NC}"; }
 error() { echo -e "${RED}✗ $1${NC}" >&2; exit "${2:-1}"; }
 info() { echo -e "${CYAN}→ $1${NC}"; }
-warning() { echo -e "${YELLOW}⚠  $1${NC}"; }
 
 clear
 echo ""
@@ -37,81 +30,85 @@ success "Exécution sur le serveur Proxmox détectée"
 
 # Variables
 INSTALL_DIR="/root/auto_gsb"
-GITHUB_REPO="https://github.com/VOTRE_USERNAME/auto_gsb"  # À MODIFIER
+GITHUB_REPO="https://github.com/VOTRE_USERNAME/auto_gsb.git"  # À MODIFIER
+LXC_TEMPLATE_FILENAME="debian-12-standard_12.12-1_amd64.tar.zst"
+LXC_TEMPLATE="/var/lib/vz/template/cache/$LXC_TEMPLATE_FILENAME"
+LXC_TEMPLATE_URL="http://download.proxmox.com/images/system/$LXC_TEMPLATE_FILENAME"
 
-# Vérifier que git est installé
+# === 1. Installation de Terraform ===
+if ! command -v terraform &> /dev/null; then
+    info "Installation de Terraform..."
+    wget -q https://releases.hashicorp.com/terraform/1.7.0/terraform_1.7.0_linux_amd64.zip
+    apt install -y unzip
+    unzip -q terraform_1.7.0_linux_amd64.zip
+    mv terraform /usr/local/bin/
+    chmod +x /usr/local/bin/terraform
+    rm terraform_1.7.0_linux_amd64.zip
+    success "Terraform installé: $(terraform version | head -1)"
+else
+    success "Terraform déjà installé"
+fi
+
+# === 2. Installation d'Ansible ===
+if ! command -v ansible &> /dev/null; then
+    info "Installation d'Ansible..."
+    apt update && apt install -y ansible python3-pip
+    success "Ansible installé"
+else
+    success "Ansible déjà installé"
+fi
+
+# === 3. Installation de git ===
 if ! command -v git &> /dev/null; then
     info "Installation de git..."
-    apt update && apt install -y git
+    apt install -y git
 fi
 
-# Vérifier que Terraform est installé
-if ! command -v terraform &> /dev/null; then
-    warning "Terraform n'est pas installé"
-    read -p "Voulez-vous installer Terraform? (o/N): " INSTALL_TF
-    if [[ "$INSTALL_TF" =~ ^[oOyY]$ ]]; then
-        info "Installation de Terraform..."
-        wget -q https://releases.hashicorp.com/terraform/1.7.0/terraform_1.7.0_linux_amd64.zip
-        apt install -y unzip
-        unzip -q terraform_1.7.0_linux_amd64.zip
-        mv terraform /usr/local/bin/
-        chmod +x /usr/local/bin/terraform
-        rm terraform_1.7.0_linux_amd64.zip
-        success "Terraform installé: $(terraform version | head -1)"
-    else
-        error "Terraform est requis pour continuer"
-    fi
+# === 4. Téléchargement du template LXC Debian ===
+if [ ! -f "$LXC_TEMPLATE" ]; then
+    info "Téléchargement du template Debian 12..."
+    wget -O "$LXC_TEMPLATE" "$LXC_TEMPLATE_URL"
+    success "Template téléchargé"
 else
-    success "Terraform déjà installé: $(terraform version | head -1)"
+    success "Template Debian 12 déjà présent"
 fi
 
-# Vérifier qu'Ansible est installé
-if ! command -v ansible &> /dev/null; then
-    warning "Ansible n'est pas installé"
-    read -p "Voulez-vous installer Ansible? (o/N): " INSTALL_ANS
-    if [[ "$INSTALL_ANS" =~ ^[oOyY]$ ]]; then
-        info "Installation d'Ansible..."
-        apt update && apt install -y ansible python3-pip
-        success "Ansible installé: $(ansible --version | head -1)"
-    else
-        error "Ansible est requis pour continuer"
-    fi
-else
-    success "Ansible déjà installé: $(ansible --version | head -1)"
-fi
-
-# Cloner ou mettre à jour le repository
+# === 5. Clonage du repository ===
 if [ -d "$INSTALL_DIR" ]; then
-    warning "Le répertoire $INSTALL_DIR existe déjà"
-    read -p "Voulez-vous le mettre à jour? (o/N): " UPDATE_REPO
-    if [[ "$UPDATE_REPO" =~ ^[oOyY]$ ]]; then
-        info "Mise à jour du repository..."
-        cd "$INSTALL_DIR"
-        git pull
-        success "Repository mis à jour"
-    fi
+    info "Le répertoire $INSTALL_DIR existe déjà, mise à jour..."
+    cd "$INSTALL_DIR"
+    git pull
 else
-    info "Clonage du repository..."
+    info "Clonage du repository depuis GitHub..."
     git clone "$GITHUB_REPO" "$INSTALL_DIR"
-    success "Repository cloné dans $INSTALL_DIR"
 fi
 
 cd "$INSTALL_DIR"
+success "Projet récupéré"
 
-# Configurer .env.local
-if [ ! -f ".env.local" ]; then
-    info "Configuration de .env.local..."
+# === 6. Configuration ===
+info "Configuration de l'environnement..."
 
-    # Demander le nom du node
-    read -p "Nom du node Proxmox (défaut: proxmox): " NODE_NAME
-    NODE_NAME="${NODE_NAME:-proxmox}"
+# Demander le nom du node
+read -p "Nom du node Proxmox (défaut: $(hostname)): " NODE_NAME
+NODE_NAME="${NODE_NAME:-$(hostname)}"
 
-    # Demander le mot de passe root
-    read -sp "Mot de passe root Proxmox: " ROOT_PASSWORD
-    echo ""
+# Demander le mot de passe root
+read -sp "Mot de passe root Proxmox: " ROOT_PASSWORD
+echo ""
 
-    # Créer .env.local
-    cat > .env.local <<EOF
+# Générer clé SSH si elle n'existe pas
+SSH_KEY_PATH="/root/.ssh/id_ed25519"
+if [ ! -f "$SSH_KEY_PATH" ]; then
+    info "Génération d'une clé SSH..."
+    ssh-keygen -t ed25519 -f "$SSH_KEY_PATH" -N ""
+    success "Clé SSH générée"
+fi
+
+SSH_PUB_KEY=$(cat "${SSH_KEY_PATH}.pub")
+
+# Créer .env.local
+cat > .env.local <<EOF
 # Configuration générée par install.sh
 # Date: $(date)
 
@@ -119,13 +116,13 @@ if [ ! -f ".env.local" ]; then
 TARGET_NODE=${NODE_NAME}
 
 # Template LXC Debian
-TEMPLATE_NAME=debian-12-standard_12.12-1_amd64.tar.zst
+TEMPLATE_NAME=${LXC_TEMPLATE_FILENAME}
 
 # Stockage
 VM_STORAGE=local-lvm
 
-# Clé SSH (générez une clé avec: ssh-keygen -t ed25519)
-SSH_KEYS=""
+# Clé SSH
+SSH_KEYS="${SSH_PUB_KEY}"
 
 # Credentials par défaut des containers
 CI_USER=sio2027
@@ -140,40 +137,15 @@ WINDOWS_TEMPLATE_ID=WSERVER-TEMPLATE
 WINDOWS_ADMIN_PASSWORD=Admin123@
 EOF
 
-    success ".env.local créé"
-    warning "Pensez à ajouter votre clé SSH publique dans .env.local"
-else
-    success ".env.local existe déjà"
-fi
+success ".env.local créé"
 
-# Vérifier le template Debian
-info "Vérification du template Debian..."
-if ! pveam list local | grep -q "debian-12-standard"; then
-    warning "Template Debian 12 non trouvé"
-    read -p "Voulez-vous le télécharger? (o/N): " DOWNLOAD_TPL
-    if [[ "$DOWNLOAD_TPL" =~ ^[oOyY]$ ]]; then
-        info "Téléchargement du template (cela peut prendre quelques minutes)..."
-        pveam download local debian-12-standard_12.12-1_amd64.tar.zst
-        success "Template téléchargé"
-    fi
-else
-    success "Template Debian 12 trouvé"
-fi
-
+# === 7. Lancement du déploiement ===
 echo ""
 echo -e "${GREEN}╔════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║         INSTALLATION TERMINÉE ✓                ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${CYAN}Prochaines étapes:${NC}"
-echo ""
-echo "1. Configurer votre clé SSH:"
-echo "   ${YELLOW}nano $INSTALL_DIR/.env.local${NC}"
-echo ""
-echo "2. Lancer le déploiement:"
+echo -e "${CYAN}Pour déployer des containers:${NC}"
 echo "   ${YELLOW}cd $INSTALL_DIR${NC}"
 echo "   ${YELLOW}./deploy_local.sh${NC}"
-echo ""
-echo "3. Documentation complète:"
-echo "   ${YELLOW}cat $INSTALL_DIR/DEPLOY_LOCAL.md${NC}"
 echo ""
