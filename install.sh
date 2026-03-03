@@ -17,7 +17,7 @@ warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
 
 is_ephemeral_dir() {
     case "$1" in
-        /tmp/*|/private/tmp/*|/var/folders/*/T/*) return 0 ;;
+        /tmp/*|/private/tmp/*|/var/folders/*/T/*|/dev/fd|/dev/fd/*|/proc/self/fd|/proc/self/fd/*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -58,6 +58,35 @@ sync_project_repo() {
     fi
 }
 
+clean_install_dir_before_sync() {
+    if [ "${CLEAN_BEFORE_SYNC:-1}" != "1" ]; then
+        return 0
+    fi
+
+    # Ne jamais nettoyer le dossier d'exécution courant (mode repo local)
+    if [ "$SCRIPT_DIR" = "$INSTALL_DIR" ]; then
+        return 0
+    fi
+
+    if [ ! -e "$INSTALL_DIR" ]; then
+        return 0
+    fi
+
+    info "Nettoyage de l'ancienne installation dans ${INSTALL_DIR}..."
+
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        # Nettoyage complet d'un ancien clone
+        git -C "$INSTALL_DIR" fetch origin "$REPO_BRANCH" >/dev/null 2>&1 || true
+        git -C "$INSTALL_DIR" checkout "$REPO_BRANCH" >/dev/null 2>&1 || true
+        git -C "$INSTALL_DIR" reset --hard "origin/$REPO_BRANCH" >/dev/null 2>&1 || true
+        git -C "$INSTALL_DIR" clean -fdx >/dev/null 2>&1 || true
+    else
+        rm -rf "$INSTALL_DIR"
+    fi
+
+    success "Nettoyage terminé"
+}
+
 clear
 echo ""
 echo -e "${BLUE}╔════════════════════════════════════════════════╗${NC}"
@@ -83,6 +112,7 @@ if [ -z "${INSTALL_DIR:-}" ]; then
 fi
 
 command -v git >/dev/null 2>&1 || error "git est requis pour synchroniser le projet."
+clean_install_dir_before_sync
 sync_project_repo
 
 if [ "${INSTALL_BOOTSTRAPPED:-0}" != "1" ] && [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
