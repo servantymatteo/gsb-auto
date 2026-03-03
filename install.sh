@@ -15,6 +15,49 @@ error() { echo -e "${RED}✗ $1${NC}" >&2; exit "${2:-1}"; }
 info() { echo -e "${CYAN}→ $1${NC}"; }
 warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
 
+is_ephemeral_dir() {
+    case "$1" in
+        /tmp/*|/private/tmp/*|/var/folders/*/T/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+sync_project_repo() {
+    info "Synchronisation du projet (${REPO_BRANCH}) dans ${INSTALL_DIR}..."
+
+    if [ ! -d "$INSTALL_DIR/.git" ]; then
+        mkdir -p "$(dirname "$INSTALL_DIR")"
+        git clone -b "$REPO_BRANCH" "$GITHUB_REPO" "$INSTALL_DIR" >/dev/null \
+          || error "Clone du dépôt impossible: $GITHUB_REPO"
+        success "Projet cloné dans $INSTALL_DIR"
+        return 0
+    fi
+
+    if ! git -C "$INSTALL_DIR" fetch origin "$REPO_BRANCH" >/dev/null 2>&1; then
+        warning "Impossible de récupérer origin/${REPO_BRANCH}. Utilisation de la version locale."
+        return 0
+    fi
+
+    local local_head remote_head
+    local_head="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+    remote_head="$(git -C "$INSTALL_DIR" rev-parse "origin/${REPO_BRANCH}")"
+
+    if [ "$local_head" = "$remote_head" ]; then
+        success "Projet déjà à jour (${local_head:0:7})"
+        return 0
+    fi
+
+    if git -C "$INSTALL_DIR" merge-base --is-ancestor "$local_head" "$remote_head"; then
+        git -C "$INSTALL_DIR" checkout "$REPO_BRANCH" >/dev/null 2>&1 || true
+        git -C "$INSTALL_DIR" pull --ff-only origin "$REPO_BRANCH" >/dev/null \
+          || error "Mise à jour du dépôt impossible (ff-only)."
+        success "Projet mis à jour ${local_head:0:7} -> ${remote_head:0:7}"
+    else
+        warning "Le dépôt local diverge de origin/${REPO_BRANCH}; aucune fusion auto."
+        warning "Dépôt utilisé tel quel: $INSTALL_DIR"
+    fi
+}
+
 clear
 echo ""
 echo -e "${BLUE}╔════════════════════════════════════════════════╗${NC}"
@@ -29,8 +72,28 @@ fi
 success "Serveur Proxmox détecté"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_DIR="${INSTALL_DIR:-$SCRIPT_DIR}"
 GITHUB_REPO="${GITHUB_REPO:-https://github.com/servantymatteo/gsb-auto.git}"
+REPO_BRANCH="${REPO_BRANCH:-local}"
+if [ -z "${INSTALL_DIR:-}" ]; then
+    if is_ephemeral_dir "$SCRIPT_DIR"; then
+        INSTALL_DIR="$HOME/gsb-auto"
+    else
+        INSTALL_DIR="$SCRIPT_DIR"
+    fi
+fi
+
+command -v git >/dev/null 2>&1 || error "git est requis pour synchroniser le projet."
+sync_project_repo
+
+if [ "${INSTALL_BOOTSTRAPPED:-0}" != "1" ] && [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
+    info "Relance du script depuis ${INSTALL_DIR}..."
+    exec env \
+      INSTALL_BOOTSTRAPPED=1 \
+      INSTALL_DIR="$INSTALL_DIR" \
+      GITHUB_REPO="$GITHUB_REPO" \
+      REPO_BRANCH="$REPO_BRANCH" \
+      bash "$INSTALL_DIR/install.sh" "$@"
+fi
 
 # CT outils
 TOOLS_CT_NAME="${TOOLS_CT_NAME:-auto-gsb-tools}"
@@ -141,9 +204,12 @@ install_tools_in_ct() {
     info "Préparation du projet dans le CT..."
     pct exec "$ctid" -- bash -lc "
         if [ -d /opt/auto_gsb/.git ]; then
-            cd /opt/auto_gsb && git pull --ff-only >/dev/null || true
+            cd /opt/auto_gsb && \
+            git fetch origin '${REPO_BRANCH}' >/dev/null 2>&1 || true && \
+            git checkout '${REPO_BRANCH}' >/dev/null 2>&1 || true && \
+            git pull --ff-only origin '${REPO_BRANCH}' >/dev/null || true
         else
-            git clone '$GITHUB_REPO' /opt/auto_gsb >/dev/null
+            git clone -b '${REPO_BRANCH}' '$GITHUB_REPO' /opt/auto_gsb >/dev/null
         fi
     "
 

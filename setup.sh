@@ -38,6 +38,156 @@ require_env_var() {
     fi
 }
 
+prompt_env_value() {
+    local prompt_text="$1"
+    local default_value="$2"
+    local is_secret="${3:-0}"
+    local value=""
+
+    while true; do
+        if [ "$is_secret" = "1" ]; then
+            read -r -s -p "$prompt_text [$default_value] : " value
+            echo ""
+        else
+            read -r -p "$prompt_text [$default_value] : " value
+        fi
+
+        value="${value:-$default_value}"
+        if [ -n "$value" ]; then
+            printf '%s\n' "$value"
+            return 0
+        fi
+        echo -e "${RED}${CROSS} Valeur requise${NC}"
+    done
+}
+
+upsert_env_var() {
+    local key="$1"
+    local value="$2"
+    local escaped_value
+    escaped_value=$(printf '%s' "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+    if grep -qE "^${key}=" .env.local; then
+        sed -i "s|^${key}=.*$|${key}=\"${escaped_value}\"|" .env.local
+    else
+        echo "${key}=\"${escaped_value}\"" >> .env.local
+    fi
+}
+
+configure_env_file() {
+    local reconfigure="${1:-0}"
+    local defaults_file=".env.local.example"
+
+    if [ "$reconfigure" = "1" ]; then
+        cp .env.local .env.local.bak.$(date +%Y%m%d_%H%M%S)
+    fi
+
+    if [ ! -f ".env.local" ]; then
+        if [ -f "$defaults_file" ]; then
+            cp "$defaults_file" .env.local
+        else
+            touch .env.local
+        fi
+    fi
+
+    # Charger les valeurs actuelles comme defaults
+    # shellcheck disable=SC1091
+    source .env.local
+
+    echo ""
+    echo -e "${BOLD}${BLUE}━━━ Assistant .env.local ━━━${NC}"
+    echo ""
+
+    local proxmox_api_url proxmox_token_id proxmox_token_secret target_node template_name
+    local vm_storage vm_network_bridge ssh_keys ci_user ci_password windows_template_id
+    local windows_admin_password windows_install_iso virtio_iso windows_iso_storage
+
+    proxmox_api_url=$(prompt_env_value "PROXMOX_API_URL" "${PROXMOX_API_URL:-https://localhost:8006/api2/json}")
+    proxmox_token_id=$(prompt_env_value "PROXMOX_TOKEN_ID" "${PROXMOX_TOKEN_ID:-root@pam!terraform}")
+    proxmox_token_secret=$(prompt_env_value "PROXMOX_TOKEN_SECRET" "${PROXMOX_TOKEN_SECRET:-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}" 1)
+    target_node=$(prompt_env_value "TARGET_NODE" "${TARGET_NODE:-proxmox}")
+    template_name=$(prompt_env_value "TEMPLATE_NAME" "${TEMPLATE_NAME:-debian-12-standard_12.12-1_amd64.tar.zst}")
+    vm_storage=$(prompt_env_value "VM_STORAGE" "${VM_STORAGE:-local-lvm}")
+    vm_network_bridge=$(prompt_env_value "VM_NETWORK_BRIDGE" "${VM_NETWORK_BRIDGE:-vmbr0}")
+    read -r -p "SSH_KEYS [${SSH_KEYS:-}] : " ssh_keys
+    ssh_keys="${ssh_keys:-${SSH_KEYS:-}}"
+    ci_user=$(prompt_env_value "CI_USER" "${CI_USER:-sio2027}")
+    ci_password=$(prompt_env_value "CI_PASSWORD" "${CI_PASSWORD:-Formation13@}" 1)
+    windows_template_id=$(prompt_env_value "WINDOWS_TEMPLATE_ID" "${WINDOWS_TEMPLATE_ID:-WSERVER-TEMPLATE}")
+    windows_admin_password=$(prompt_env_value "WINDOWS_ADMIN_PASSWORD" "${WINDOWS_ADMIN_PASSWORD:-Admin123@}" 1)
+    read -r -p "WINDOWS_INSTALL_ISO [${WINDOWS_INSTALL_ISO:-}] : " windows_install_iso
+    windows_install_iso="${windows_install_iso:-${WINDOWS_INSTALL_ISO:-}}"
+    read -r -p "VIRTIO_ISO [${VIRTIO_ISO:-}] : " virtio_iso
+    virtio_iso="${virtio_iso:-${VIRTIO_ISO:-}}"
+    windows_iso_storage=$(prompt_env_value "WINDOWS_ISO_STORAGE" "${WINDOWS_ISO_STORAGE:-local}")
+
+    upsert_env_var "PROXMOX_API_URL" "$proxmox_api_url"
+    upsert_env_var "PROXMOX_TOKEN_ID" "$proxmox_token_id"
+    upsert_env_var "PROXMOX_TOKEN_SECRET" "$proxmox_token_secret"
+    upsert_env_var "TARGET_NODE" "$target_node"
+    upsert_env_var "TEMPLATE_NAME" "$template_name"
+    upsert_env_var "VM_STORAGE" "$vm_storage"
+    upsert_env_var "VM_NETWORK_BRIDGE" "$vm_network_bridge"
+    upsert_env_var "SSH_KEYS" "$ssh_keys"
+    upsert_env_var "CI_USER" "$ci_user"
+    upsert_env_var "CI_PASSWORD" "$ci_password"
+    upsert_env_var "WINDOWS_TEMPLATE_ID" "$windows_template_id"
+    upsert_env_var "WINDOWS_ADMIN_PASSWORD" "$windows_admin_password"
+    upsert_env_var "WINDOWS_INSTALL_ISO" "$windows_install_iso"
+    upsert_env_var "VIRTIO_ISO" "$virtio_iso"
+    upsert_env_var "WINDOWS_ISO_STORAGE" "$windows_iso_storage"
+
+    # Recharger les variables mises à jour
+    # shellcheck disable=SC1091
+    source .env.local
+    echo -e "${GREEN}${CHECK} .env.local mis à jour${NC}"
+    echo ""
+}
+
+install_powershell() {
+    if [ "$(id -u)" -ne 0 ]; then
+        error_exit "Installation PowerShell requiert root (sudo -i)."
+    fi
+
+    echo -e "${CYAN}${ARROW} Installation de PowerShell...${NC}"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update >/dev/null || error_exit "apt-get update a échoué."
+    apt-get install -y wget apt-transport-https software-properties-common gpg >/dev/null \
+      || error_exit "Installation des prérequis PowerShell impossible."
+    wget -q https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb -O /tmp/packages-microsoft-prod.deb \
+      || error_exit "Téléchargement du dépôt Microsoft impossible."
+    dpkg -i /tmp/packages-microsoft-prod.deb >/dev/null || error_exit "Ajout du dépôt Microsoft impossible."
+    rm -f /tmp/packages-microsoft-prod.deb
+    apt-get update >/dev/null || error_exit "apt-get update après dépôt Microsoft a échoué."
+    apt-get install -y powershell >/dev/null || error_exit "Installation de powershell impossible."
+    echo -e "${GREEN}${CHECK} PowerShell installé${NC}"
+}
+
+terraform_init_with_retry() {
+    local max_attempts=5
+    local attempt=1
+
+    while [ "$attempt" -le "$max_attempts" ]; do
+        echo -e "${CYAN}${ARROW} Initialisation Terraform (tentative ${attempt}/${max_attempts})...${NC}"
+        if (
+            cd terraform && \
+            TF_REGISTRY_DISCOVERY_RETRY=10 \
+            TF_REGISTRY_CLIENT_TIMEOUT=60 \
+            terraform init -input=false -reconfigure -upgrade -compact-warnings
+        ); then
+            echo -e "${GREEN}${CHECK} Terraform initialisé${NC}"
+            return 0
+        fi
+
+        if [ "$attempt" -lt "$max_attempts" ]; then
+            sleep 5
+        fi
+        attempt=$((attempt + 1))
+    done
+
+    return 1
+}
+
 windows_template_exists() {
     local template_id="$1"
     local api_base_url="${PROXMOX_API_URL%/api2/json}"
@@ -79,17 +229,18 @@ echo ""
 # Charger la configuration depuis .env.local
 echo -e "${CYAN}${ARROW} Vérification de la configuration...${NC}"
 if [ ! -f ".env.local" ]; then
-    echo -e "${RED}${CROSS} Fichier .env.local non trouvé${NC}"
-    echo ""
-    echo -e "${YELLOW}Créez un fichier .env.local avec vos informations d'API Proxmox :${NC}"
-    echo -e "  ${BOLD}cp .env.local.example .env.local${NC}"
-    echo -e "  ${BOLD}nano .env.local${NC}"
-    echo ""
-    exit 1
+    echo -e "${YELLOW}${ARROW} Fichier .env.local absent: lancement de l'assistant.${NC}"
+    configure_env_file 0
+else
+    # shellcheck disable=SC1091
+    source .env.local
+    echo -e "${GREEN}${CHECK} Configuration chargée avec succès${NC}"
+    echo -e "${YELLOW}Voulez-vous reconfigurer .env.local maintenant ? (o/N)${NC}"
+    read -r -p "> " reconfigure_env
+    if [[ "$reconfigure_env" == "o" || "$reconfigure_env" == "O" ]]; then
+        configure_env_file 1
+    fi
 fi
-
-echo -e "${GREEN}${CHECK} Configuration chargée avec succès${NC}"
-source .env.local
 echo ""
 
 # Préflight outils requis
@@ -188,6 +339,17 @@ fi
 
 for service_num in "${SELECTED_SERVICES[@]}"; do
     if [ "$service_num" = "5" ]; then
+        if ! command -v pwsh >/dev/null 2>&1; then
+            echo -e "${YELLOW}${ARROW} PowerShell (pwsh) est requis pour Active Directory.${NC}"
+            echo -e "${YELLOW}Installer PowerShell automatiquement maintenant ? (O/n)${NC}"
+            read -r -p "> " install_pwsh
+            install_pwsh="${install_pwsh:-O}"
+            if [[ "$install_pwsh" =~ ^[oOyY]$ ]]; then
+                install_powershell
+            else
+                error_exit "pwsh n'est pas installé. Relance avec installation auto ou installe PowerShell manuellement."
+            fi
+        fi
         require_command "pwsh" "PowerShell est requis pour Active Directory (Windows)."
 
         WINDOWS_TEMPLATE_TO_USE="${WINDOWS_TEMPLATE_ID:-WSERVER-TEMPLATE}"
@@ -504,12 +666,13 @@ if [[ "$launch" == "o" || "$launch" == "O" ]]; then
     echo ""
 
     DEPLOY_START=$(date +%s)
-    if [ ! -d "terraform/.terraform" ]; then
-        echo -e "${CYAN}${ARROW} Initialisation Terraform...${NC}"
-        (cd terraform && terraform init -input=false -compact-warnings)
+    if ! terraform_init_with_retry; then
+        echo -e "${RED}${CROSS} Échec de terraform init après plusieurs tentatives${NC}"
+        DEPLOY_STATUS=1
+    else
+        (cd terraform && TF_IN_AUTOMATION=1 terraform apply --auto-approve -compact-warnings)
+        DEPLOY_STATUS=$?
     fi
-    (cd terraform && TF_IN_AUTOMATION=1 terraform apply --auto-approve -compact-warnings)
-    DEPLOY_STATUS=$?
     DEPLOY_END=$(date +%s)
     DEPLOY_TIME=$((DEPLOY_END - DEPLOY_START))
 
