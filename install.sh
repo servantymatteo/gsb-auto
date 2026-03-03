@@ -40,10 +40,24 @@ ensure_env_file_exists() {
     fi
 }
 
+proxmox_token_auth_ok() {
+    local token_id="$1"
+    local token_secret="$2"
+    local api_url="$3"
+    local api_base http_code
+
+    api_base="${api_url%/api2/json}"
+    http_code="$(curl -k -s -o /dev/null -w "%{http_code}" \
+      -H "Authorization: PVEAPIToken=${token_id}=${token_secret}" \
+      "${api_base}/api2/json/version" 2>/dev/null || true)"
+
+    [ "$http_code" = "200" ]
+}
+
 create_proxmox_token_auto() {
     local token_user="${PROXMOX_TOKEN_USER:-root@pam}"
-    local token_name="auto-gsb-$(date +%Y%m%d%H%M%S)"
-    local token_json token_secret token_id
+    local api_url="${PROXMOX_API_URL:-https://localhost:8006/api2/json}"
+    local attempt token_name token_json token_secret token_id
 
     if [ "$(id -u)" -ne 0 ]; then
         warning "Création automatique du token ignorée (nécessite root)."
@@ -54,35 +68,45 @@ create_proxmox_token_auto() {
         return 1
     fi
 
-    info "Création automatique d'un token API Proxmox (${token_user}!${token_name})..."
-    token_json="$(pveum user token add "$token_user" "$token_name" --privsep 0 --output-format json 2>/dev/null)" \
-      || error "Impossible de créer le token API Proxmox automatiquement."
+    for attempt in 1 2 3; do
+        token_name="auto-gsb-$(date +%Y%m%d%H%M%S)-${attempt}"
+        info "Création automatique d'un token API Proxmox (${token_user}!${token_name})..."
+        token_json="$(pveum user token add "$token_user" "$token_name" --privsep 1 --output-format json 2>/dev/null)" \
+          || error "Impossible de créer le token API Proxmox automatiquement."
 
-    token_secret="$(printf '%s\n' "$token_json" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-    [ -n "$token_secret" ] || error "Token créé mais secret introuvable dans la sortie pveum."
+        token_secret="$(printf '%s\n' "$token_json" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+        [ -n "$token_secret" ] || error "Token créé mais secret introuvable dans la sortie pveum."
 
-    token_id="${token_user}!${token_name}"
-    # Sécurise les droits effectifs pour Terraform (inclut VM.Monitor).
-    pveum user token modify "$token_user" "$token_name" --privsep 0 >/dev/null 2>&1 \
-      || error "Impossible de désactiver privsep pour le token ${token_id}."
+        token_id="${token_user}!${token_name}"
+        # Force le token en mode Privilege Separation.
+        pveum user token modify "$token_user" "$token_name" --privsep 1 >/dev/null 2>&1 \
+          || error "Impossible d'activer privsep pour le token ${token_id}."
 
-    # Donne explicitement les droits admin au user + token (syntaxes Proxmox selon version).
-    if ! pveum aclmod / -user "$token_user" -role Administrator >/dev/null 2>&1; then
-        pveum acl modify / --users "$token_user" --roles Administrator >/dev/null 2>&1 \
-          || error "Impossible d'appliquer le rôle Administrator à ${token_user}."
-    fi
-    if ! pveum aclmod / -token "$token_id" -role Administrator >/dev/null 2>&1; then
-        pveum acl modify / --tokens "$token_id" --roles Administrator >/dev/null 2>&1 \
-          || error "Impossible d'appliquer le rôle Administrator au token ${token_id}."
-    fi
+        # Donne explicitement les droits admin au user + token (syntaxes Proxmox selon version).
+        if ! pveum aclmod / -user "$token_user" -role Administrator >/dev/null 2>&1; then
+            pveum acl modify / --users "$token_user" --roles Administrator >/dev/null 2>&1 \
+              || error "Impossible d'appliquer le rôle Administrator à ${token_user}."
+        fi
+        if ! pveum aclmod / -token "$token_id" -role Administrator >/dev/null 2>&1; then
+            pveum acl modify / --tokens "$token_id" --roles Administrator >/dev/null 2>&1 \
+              || error "Impossible d'appliquer le rôle Administrator au token ${token_id}."
+        fi
 
-    ensure_env_file_exists
-    upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_TOKEN_ID" "$token_id"
-    upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_TOKEN_SECRET" "$token_secret"
-    upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_API_URL" "${PROXMOX_API_URL:-https://localhost:8006/api2/json}"
+        ensure_env_file_exists
+        upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_TOKEN_ID" "$token_id"
+        upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_TOKEN_SECRET" "$token_secret"
+        upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_API_URL" "$api_url"
 
-    success "Token API créé et injecté dans $INSTALL_DIR/.env.local"
-    return 0
+        if proxmox_token_auth_ok "$token_id" "$token_secret" "$api_url"; then
+            success "Token API créé, vérifié (HTTP 200) et injecté dans $INSTALL_DIR/.env.local"
+            return 0
+        fi
+
+        warning "Token créé mais authentification API non valide (tentative ${attempt}/3)."
+        sleep 1
+    done
+
+    error "Impossible de créer un token API valide automatiquement après 3 tentatives."
 }
 
 is_ephemeral_dir() {
