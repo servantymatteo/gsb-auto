@@ -63,8 +63,18 @@ create_proxmox_token_auto() {
 
     token_id="${token_user}!${token_name}"
     # Sécurise les droits effectifs pour Terraform (inclut VM.Monitor).
-    pveum user token modify "$token_user" "$token_name" --privsep 0 >/dev/null 2>&1 || true
-    pveum aclmod / -token "$token_id" -role Administrator >/dev/null 2>&1 || true
+    pveum user token modify "$token_user" "$token_name" --privsep 0 >/dev/null 2>&1 \
+      || error "Impossible de désactiver privsep pour le token ${token_id}."
+
+    # Donne explicitement les droits admin au user + token (syntaxes Proxmox selon version).
+    if ! pveum aclmod / -user "$token_user" -role Administrator >/dev/null 2>&1; then
+        pveum acl modify / --users "$token_user" --roles Administrator >/dev/null 2>&1 \
+          || error "Impossible d'appliquer le rôle Administrator à ${token_user}."
+    fi
+    if ! pveum aclmod / -token "$token_id" -role Administrator >/dev/null 2>&1; then
+        pveum acl modify / --tokens "$token_id" --roles Administrator >/dev/null 2>&1 \
+          || error "Impossible d'appliquer le rôle Administrator au token ${token_id}."
+    fi
 
     ensure_env_file_exists
     upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_TOKEN_ID" "$token_id"
