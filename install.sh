@@ -62,6 +62,10 @@ create_proxmox_token_auto() {
     [ -n "$token_secret" ] || error "Token créé mais secret introuvable dans la sortie pveum."
 
     token_id="${token_user}!${token_name}"
+    # Sécurise les droits effectifs pour Terraform (inclut VM.Monitor).
+    pveum user token modify "$token_user" "$token_name" --privsep 0 >/dev/null 2>&1 || true
+    pveum aclmod / -token "$token_id" -role Administrator >/dev/null 2>&1 || true
+
     ensure_env_file_exists
     upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_TOKEN_ID" "$token_id"
     upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_TOKEN_SECRET" "$token_secret"
