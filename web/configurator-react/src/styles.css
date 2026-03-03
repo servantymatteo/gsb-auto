@@ -1,0 +1,146 @@
+:root {
+  --bg: #f4efe6;
+  --ink: #172026;
+  --card: #fff9f1;
+  --line: #d9c9b5;
+  --accent: #0e8f78;
+  --accent-2: #ec5f3c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: "Space Grotesk", "Avenir Next", "Helvetica Neue", sans-serif;
+  background:
+    radial-gradient(circle at 10% 20%, #ffe1bd 0, transparent 35%),
+    radial-gradient(circle at 85% 10%, #b2e8de 0, transparent 30%),
+    var(--bg);
+}
+
+.page {
+  width: min(1180px, 94vw);
+  margin: 26px auto 40px;
+}
+
+.hero h1 {
+  margin: 0 0 6px;
+  font-size: clamp(2rem, 5vw, 3rem);
+  letter-spacing: 0.01em;
+}
+
+.hero p {
+  margin: 0 0 18px;
+  font-weight: 600;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  margin: 14px 0;
+  padding: 14px;
+  box-shadow: 0 8px 24px rgba(55, 28, 8, 0.06);
+}
+
+.card h2 {
+  margin: 0 0 14px;
+}
+
+.grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+input,
+textarea {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  background: #fffdf9;
+}
+
+textarea {
+  width: 100%;
+  min-height: 210px;
+  resize: vertical;
+}
+
+.serviceList {
+  display: grid;
+  gap: 12px;
+}
+
+.serviceItem {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.toggle input {
+  width: 18px;
+  height: 18px;
+}
+
+.outputs .outBlock {
+  margin-bottom: 18px;
+}
+
+.outputs h3 {
+  margin: 0 0 8px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+button {
+  border: none;
+  border-radius: 8px;
+  font-weight: 800;
+  color: #fff;
+  padding: 9px 12px;
+  cursor: pointer;
+  background: linear-gradient(90deg, var(--accent), #1477b8);
+}
+
+button:last-child {
+  background: linear-gradient(90deg, var(--accent-2), #f19a32);
+}
+
+.copied {
+  margin: 0;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .page {
+    width: 96vw;
+  }
+}

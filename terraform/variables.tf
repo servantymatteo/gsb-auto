@@ -130,3 +130,17 @@ variable "ssh_keys" {
   type        = string
   default     = ""
 }
+
+# Configuration Windows
+variable "windows_template_id" {
+  description = "Nom ou ID du template Windows Server avec cloudbase-init (ex: WSERVER-TEMPLATE ou 100)"
+  type        = string
+  default     = "WSERVER-TEMPLATE"
+}
+
+variable "windows_admin_password" {
+  description = "Mot de passe administrateur Windows"
+  type        = string
+  sensitive   = true
+  default     = "Admin123@"
+}

@@ -1,0 +1,185 @@
+---
+# PLAYBOOK ANSIBLE - Installation et configuration Active Directory Domain Services
+- name: Installer et configurer Active Directory sur Windows Server
+  hosts: all
+  gather_facts: yes
+
+  tasks:
+    - name: Charger la configuration AD DS locale si présente
+      include_vars:
+        file: "{{ playbook_dir }}/../vars/ad_ds.yml"
+        name: ad_cfg
+      ignore_errors: yes
+
+    - name: Définir les variables AD DS
+      set_fact:
+        domain_name: "{{ ad_cfg.domain_name | default('gsb.local') }}"
+        domain_netbios: "{{ ad_cfg.domain_netbios | default((ad_cfg.domain_name | default('gsb.local')).split('.')[0] | upper) }}"
+        safe_mode_password: "{{ ad_cfg.safe_mode_password | default('SafeMode123@') }}"
+        dns_forwarders: "{{ ad_cfg.dns_forwarders | default(['8.8.8.8', '8.8.4.4']) }}"
+        users_ou_name: "{{ ad_cfg.users_ou_name | default('Utilisateurs_GSB') }}"
+        ad_ous: "{{ ad_cfg.ad_ous | default(['Utilisateurs_GSB', 'Ordinateurs_GSB', 'Serveurs_GSB']) }}"
+        ad_admin_group: "{{ ad_cfg.ad_admin_group | default('Admins_GSB') }}"
+        admin_password: "{{ ad_cfg.admin_password | default('Admin123@') }}"
+        default_user_password: "{{ ad_cfg.default_user_password | default('User123@') }}"
+        ad_admin_user: "{{ ad_cfg.ad_admin_user | default({'name': 'admin.gsb', 'firstname': 'Admin', 'surname': 'GSB'}) }}"
+        ad_test_users: "{{ ad_cfg.ad_test_users | default([
+          {'name': 'user1.gsb', 'firstname': 'Utilisateur', 'surname': 'Un'},
+          {'name': 'user2.gsb', 'firstname': 'Utilisateur', 'surname': 'Deux'},
+          {'name': 'user3.gsb', 'firstname': 'Utilisateur', 'surname': 'Trois'}
+        ]) }}"
+
+    - name: Calculer le DN du domaine
+      set_fact:
+        domain_dn: "{{ domain_name.split('.') | map('regex_replace', '^(.*)$', 'DC=\\1') | join(',') }}"
+
+    - name: Attendre que WinRM soit disponible
+      wait_for_connection:
+        timeout: 300
+        delay: 10
+
+    - name: Installer le rôle AD DS
+      win_feature:
+        name:
+          - AD-Domain-Services
+          - RSAT-ADDS
+          - DNS
+        include_management_tools: yes
+        state: present
+      register: adds_install
+
+    - name: Redémarrer si nécessaire après installation AD DS
+      win_reboot:
+        msg: "Redémarrage après installation AD DS"
+        pre_reboot_delay: 10
+      when: adds_install.reboot_required
+
+    - name: Promouvoir le serveur en contrôleur de domaine
+      win_domain:
+        dns_domain_name: "{{ domain_name }}"
+        domain_netbios_name: "{{ domain_netbios }}"
+        safe_mode_password: "{{ safe_mode_password }}"
+        create_dns_delegation: no
+        database_path: "C:\\Windows\\NTDS"
+        sysvol_path: "C:\\Windows\\SYSVOL"
+        install_dns: yes
+      register: domain_install
+
+    - name: Redémarrer après promotion DC
+      win_reboot:
+        msg: "Redémarrage après promotion en contrôleur de domaine"
+        pre_reboot_delay: 10
+        post_reboot_delay: 60
+      when: domain_install.reboot_required
+
+    - name: Attendre que le domaine soit opérationnel
+      win_wait_for:
+        timeout: 300
+        delay: 30
+
+    - name: Configurer les redirecteurs DNS
+      win_shell: |
+        Add-DnsServerForwarder -IPAddress {{ dns_forwarders | join(',') }} -PassThru
+      ignore_errors: yes
+
+    - name: Créer une OU pour les utilisateurs
+      win_domain_ou:
+        name: "{{ item }}"
+        path: "{{ domain_dn }}"
+        state: present
+      loop: "{{ ad_ous }}"
+      ignore_errors: yes
+
+    - name: Créer un groupe d'administrateurs GSB
+      win_domain_group:
+        name: "{{ ad_admin_group }}"
+        scope: global
+        category: security
+        organizational_unit: "OU={{ users_ou_name }},{{ domain_dn }}"
+        state: present
+      ignore_errors: yes
+
+    - name: Créer un utilisateur administrateur de test
+      win_domain_user:
+        name: "{{ ad_admin_user.name }}"
+        firstname: "{{ ad_admin_user.firstname }}"
+        surname: "{{ ad_admin_user.surname }}"
+        password: "{{ admin_password }}"
+        state: present
+        path: "OU={{ users_ou_name }},{{ domain_dn }}"
+        groups:
+          - Domain Admins
+          - "{{ ad_admin_group }}"
+        password_never_expires: yes
+        user_cannot_change_password: no
+      ignore_errors: yes
+
+    - name: Créer des utilisateurs de test
+      win_domain_user:
+        name: "{{ item.name }}"
+        firstname: "{{ item.firstname }}"
+        surname: "{{ item.surname }}"
+        password: "{{ item.password | default(default_user_password) }}"
+        state: present
+        path: "OU={{ users_ou_name }},{{ domain_dn }}"
+        password_never_expires: no
+        user_cannot_change_password: no
+      loop: "{{ ad_test_users }}"
+      ignore_errors: yes
+
+    - name: Afficher les informations de connexion
+      debug:
+        msg: |
+          ╔════════════════════════════════════════════════╗
+          ║    ACTIVE DIRECTORY INSTALLÉ ET CONFIGURÉ ! ✓  ║
+          ╚════════════════════════════════════════════════╝
+
+          🌐 Domaine : {{ domain_name }}
+          🏷️  NetBIOS : {{ domain_netbios }}
+
+          🔐 Compte Administrateur Principal :
+          ┌────────────────────────────────────────────────┐
+          │ 👤 Utilisateur : Administrator                 │
+          │ 🔑 Mot de passe : {{ admin_password }}         │
+          └────────────────────────────────────────────────┘
+
+          🔐 Compte Administrateur de domaine :
+          ┌────────────────────────────────────────────────┐
+          │ 👤 Utilisateur : {{ ad_admin_user.name }}@{{ domain_name }}   │
+          │ 🔑 Mot de passe : {{ admin_password }}         │
+          └────────────────────────────────────────────────┘
+
+          👥 Comptes utilisateurs de test créés :
+          ┌────────────────────────────────────────────────┐
+          {% for user in ad_test_users %}
+          │ • {{ user.name }}@{{ domain_name }} / {{ user.password | default(default_user_password) }} │
+          {% endfor %}
+          └────────────────────────────────────────────────┘
+
+          📁 Unités d'organisation créées :
+          ┌────────────────────────────────────────────────┐
+          {% for ou in ad_ous %}
+          │ • OU={{ ou }},{{ domain_dn }}                  │
+          {% endfor %}
+          └────────────────────────────────────────────────┘
+
+          🌐 Serveurs DNS configurés : {{ dns_forwarders | join(', ') }}
+
+          📋 Informations du serveur :
+          ┌────────────────────────────────────────────────┐
+          │ Nom : {{ ansible_hostname }}                   │
+          │ IP  : {{ ansible_ip_addresses[0] }}            │
+          │ OS  : {{ ansible_os_family }} {{ ansible_distribution_version }} │
+          └────────────────────────────────────────────────┘
+
+          💡 Joindre un poste au domaine :
+          ┌────────────────────────────────────────────────┐
+          │ 1. Configurer le DNS : {{ ansible_ip_addresses[0] }}              │
+          │ 2. Joindre le domaine : {{ domain_name }}      │
+          │ 3. Utiliser : admin.gsb@{{ domain_name }}      │
+          └────────────────────────────────────────────────┘
+
+          ⚠️  IMPORTANT :
+          • Changez TOUS les mots de passe par défaut !
+          • Le mot de passe Safe Mode est : {{ safe_mode_password }}
+          • Sauvegardez les informations de récupération
