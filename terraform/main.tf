@@ -16,6 +16,40 @@ locals {
 
   # URL de base de l'API Proxmox (sans /api2/json)
   api_base_url = trimsuffix(var.pm_api_url, "/api2/json")
+
+  # Chemin de la clé privée utilisée pour le provisionnement SSH des LXC
+  lxc_private_key_paths = {
+    for k, v in local.lxc_vms : k => (
+      var.ssh_keys != "" ?
+      "${path.module}/../ssh/id_ed25519_terraform" :
+      "${path.module}/../ssh/${var.vm_name}-${k}-id_ed25519"
+    )
+  }
+}
+
+# ========================================
+# CLÉS SSH LXC (auto-générées si ssh_keys est vide)
+# ========================================
+resource "tls_private_key" "lxc_ssh_key" {
+  for_each = var.ssh_keys == "" ? local.lxc_vms : {}
+
+  algorithm = "ED25519"
+}
+
+resource "local_file" "lxc_private_key" {
+  for_each = var.ssh_keys == "" ? local.lxc_vms : {}
+
+  content         = tls_private_key.lxc_ssh_key[each.key].private_key_openssh
+  filename        = "${path.module}/../ssh/${var.vm_name}-${each.key}-id_ed25519"
+  file_permission = "0600"
+}
+
+resource "local_file" "lxc_public_key" {
+  for_each = var.ssh_keys == "" ? local.lxc_vms : {}
+
+  content         = tls_private_key.lxc_ssh_key[each.key].public_key_openssh
+  filename        = "${path.module}/../ssh/${var.vm_name}-${each.key}-id_ed25519.pub"
+  file_permission = "0644"
 }
 
 # ========================================
@@ -23,6 +57,11 @@ locals {
 # ========================================
 resource "proxmox_lxc" "container" {
   for_each = local.lxc_vms
+
+  depends_on = [
+    local_file.lxc_private_key,
+    local_file.lxc_public_key,
+  ]
 
   hostname    = "${var.vm_name}-${each.key}"
   target_node = var.target_node
@@ -55,13 +94,13 @@ resource "proxmox_lxc" "container" {
 
   # Authentification
   password        = var.ci_password
-  ssh_public_keys = var.ssh_keys != "" ? var.ssh_keys : null
+  ssh_public_keys = var.ssh_keys != "" ? var.ssh_keys : tls_private_key.lxc_ssh_key[each.key].public_key_openssh
 
   # ========================================
   # PROVISIONER ANSIBLE (Linux)
   # ========================================
   provisioner "local-exec" {
-    command = "../scripts/provision.sh \"${var.vm_name}-${each.key}\" \"${var.pm_api_url}\" \"${var.pm_api_token_id}\" \"${var.pm_api_token_secret}\" \"${var.target_node}\" \"../ansible/playbooks/${each.value.playbook}\""
+    command = "../scripts/provision.sh \"${var.vm_name}-${each.key}\" \"${var.pm_api_url}\" \"${var.pm_api_token_id}\" \"${var.pm_api_token_secret}\" \"${var.target_node}\" \"../ansible/playbooks/${each.value.playbook}\" \"${local.lxc_private_key_paths[each.key]}\""
   }
 }
 
@@ -110,10 +149,10 @@ resource "proxmox_vm_qemu" "windows_vm" {
 
   # Disk configuration
   disk {
-    storage = var.vm_storage
-    type    = "scsi"
-    size    = each.value.disk_size
-    discard = "on"
+    storage  = var.vm_storage
+    type     = "scsi"
+    size     = each.value.disk_size
+    discard  = "on"
     iothread = 1
   }
 

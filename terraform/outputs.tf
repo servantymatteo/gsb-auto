@@ -36,6 +36,17 @@ output "container_ips" {
   }
 }
 
+output "lxc_ssh_private_key_paths" {
+  description = "Chemins des clés privées SSH utilisées pour les LXC"
+  value = {
+    for key, _ in proxmox_lxc.container : key => (
+      var.ssh_keys != "" ?
+      "${path.module}/../ssh/id_ed25519_terraform" :
+      "${path.module}/../ssh/${var.vm_name}-${key}-id_ed25519"
+    )
+  }
+}
+
 # ========================================
 # OUTPUTS QEMU VMs (Windows)
 # ========================================

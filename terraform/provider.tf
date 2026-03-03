@@ -4,6 +4,14 @@ terraform {
       source  = "telmate/proxmox"
       version = "2.9.14"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.0"
+    }
   }
 }
 

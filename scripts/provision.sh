@@ -13,6 +13,7 @@ API_TOKEN_ID="$3"
 API_TOKEN_SECRET="$4"
 TARGET_NODE="$5"
 PLAYBOOK="$6"
+SSH_KEY_PATH="${7:-$SSH_KEY}"
 
 # [1/4] Attente du démarrage
 info "[1/4] Démarrage du container..."
@@ -48,7 +49,7 @@ echo ""
 # [3/4] Test SSH
 info "[3/4] Test de la connexion SSH..."
 ssh_test() {
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         root@$CONTAINER_IP 'exit' 2>/dev/null
 }
 
@@ -68,7 +69,7 @@ echo -e "${YELLOW}   • Playbook: ${BOLD}$PLAYBOOK${NC}"
 echo ""
 
 ANSIBLE_FORCE_COLOR=1 ANSIBLE_CONFIG="$ANSIBLE_CONFIG" ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook \
-  --private-key="$SSH_KEY" \
+  --private-key="$SSH_KEY_PATH" \
   -i "$CONTAINER_IP," \
   -u root \
   "$PLAYBOOK" || error "Échec du provisionnement"
