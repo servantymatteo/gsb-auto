@@ -15,6 +15,62 @@ error() { echo -e "${RED}✗ $1${NC}" >&2; exit "${2:-1}"; }
 info() { echo -e "${CYAN}→ $1${NC}"; }
 warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
 
+upsert_env_var_file() {
+    local env_file="$1"
+    local key="$2"
+    local value="$3"
+    local escaped_value
+    escaped_value=$(printf '%s' "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+    if grep -qE "^${key}=" "$env_file" 2>/dev/null; then
+        sed -i "s|^${key}=.*$|${key}=\"${escaped_value}\"|" "$env_file"
+    else
+        echo "${key}=\"${escaped_value}\"" >> "$env_file"
+    fi
+}
+
+ensure_env_file_exists() {
+    if [ -f "$INSTALL_DIR/.env.local" ]; then
+        return 0
+    fi
+    if [ -f "$INSTALL_DIR/.env.local.example" ]; then
+        cp "$INSTALL_DIR/.env.local.example" "$INSTALL_DIR/.env.local"
+    else
+        touch "$INSTALL_DIR/.env.local"
+    fi
+}
+
+create_proxmox_token_auto() {
+    local token_user="${PROXMOX_TOKEN_USER:-root@pam}"
+    local token_name="auto-gsb-$(date +%Y%m%d%H%M%S)"
+    local token_json token_secret token_id
+
+    if [ "$(id -u)" -ne 0 ]; then
+        warning "Création automatique du token ignorée (nécessite root)."
+        return 1
+    fi
+    if ! command -v pveum >/dev/null 2>&1; then
+        warning "Création automatique du token ignorée (pveum introuvable)."
+        return 1
+    fi
+
+    info "Création automatique d'un token API Proxmox (${token_user}!${token_name})..."
+    token_json="$(pveum user token add "$token_user" "$token_name" --privsep 0 --output-format json 2>/dev/null)" \
+      || error "Impossible de créer le token API Proxmox automatiquement."
+
+    token_secret="$(printf '%s\n' "$token_json" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    [ -n "$token_secret" ] || error "Token créé mais secret introuvable dans la sortie pveum."
+
+    token_id="${token_user}!${token_name}"
+    ensure_env_file_exists
+    upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_TOKEN_ID" "$token_id"
+    upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_TOKEN_SECRET" "$token_secret"
+    upsert_env_var_file "$INSTALL_DIR/.env.local" "PROXMOX_API_URL" "${PROXMOX_API_URL:-https://localhost:8006/api2/json}"
+
+    success "Token API créé et injecté dans $INSTALL_DIR/.env.local"
+    return 0
+}
+
 is_ephemeral_dir() {
     case "$1" in
         /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders/*/T|/var/folders/*/T/*|/dev/fd|/dev/fd/*|/proc/self/fd|/proc/self/fd/*) return 0 ;;
@@ -292,6 +348,13 @@ fi
 if [ ! -f "$INSTALL_DIR/.env.local" ] && [ -f "$INSTALL_DIR/.env.local.example" ]; then
     cp "$INSTALL_DIR/.env.local.example" "$INSTALL_DIR/.env.local"
     warning "Fichier .env.local créé depuis .env.local.example (à compléter)"
+fi
+
+echo -e "${YELLOW}Créer automatiquement un token API Proxmox et l'écrire dans .env.local ? (O/n)${NC}"
+read -r -p "> " CREATE_API_TOKEN_NOW
+CREATE_API_TOKEN_NOW="${CREATE_API_TOKEN_NOW:-O}"
+if [[ "$CREATE_API_TOKEN_NOW" =~ ^[oOyY]$ ]]; then
+    create_proxmox_token_auto || warning "Token auto non créé, tu pourras saisir les valeurs manuellement."
 fi
 
 echo -e "${YELLOW}Voulez-vous remplir .env.local maintenant ? (O/n)${NC}"
