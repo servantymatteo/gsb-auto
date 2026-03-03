@@ -17,7 +17,7 @@ warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
 
 is_ephemeral_dir() {
     case "$1" in
-        /tmp/*|/private/tmp/*|/var/folders/*/T/*|/dev/fd|/dev/fd/*|/proc/self/fd|/proc/self/fd/*) return 0 ;;
+        /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders/*/T|/var/folders/*/T/*|/dev/fd|/dev/fd/*|/proc/self/fd|/proc/self/fd/*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -294,6 +294,14 @@ if [ ! -f "$INSTALL_DIR/.env.local" ] && [ -f "$INSTALL_DIR/.env.local.example" 
     warning "Fichier .env.local créé depuis .env.local.example (à compléter)"
 fi
 
+echo -e "${YELLOW}Voulez-vous remplir .env.local maintenant ? (O/n)${NC}"
+read -r -p "> " CONFIGURE_ENV_NOW
+CONFIGURE_ENV_NOW="${CONFIGURE_ENV_NOW:-O}"
+
+if [[ "$CONFIGURE_ENV_NOW" =~ ^[oOyY]$ ]]; then
+    (cd "$INSTALL_DIR" && bash ./setup.sh --env-only)
+fi
+
 echo ""
 echo -e "${GREEN}╔════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║         INSTALLATION TERMINÉE ✓               ║${NC}"
@@ -301,6 +309,5 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "${CYAN}Prochaines étapes:${NC}"
 echo -e "  ${YELLOW}cd $INSTALL_DIR${NC}"
-echo -e "  ${YELLOW}nano .env.local${NC}"
 echo -e "  ${YELLOW}./setup.sh${NC}"
 echo ""

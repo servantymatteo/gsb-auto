@@ -17,6 +17,11 @@ ARROW="→"
 CLOCK="⏱"
 ROCKET="🚀"
 GEAR="⚙️"
+ENV_ONLY=0
+
+if [ "${1:-}" = "--env-only" ]; then
+    ENV_ONLY=1
+fi
 
 error_exit() {
     echo -e "${RED}${CROSS} $1${NC}" >&2
@@ -242,6 +247,13 @@ else
     fi
 fi
 echo ""
+
+if [ "$ENV_ONLY" -eq 1 ]; then
+    echo -e "${GREEN}${CHECK} Configuration .env.local terminée.${NC}"
+    echo -e "${CYAN}Lance ensuite:${NC} ${BOLD}./setup.sh${NC}"
+    echo ""
+    exit 0
+fi
 
 # Préflight outils requis
 require_command "terraform" "Installe-le via ./install.sh"
