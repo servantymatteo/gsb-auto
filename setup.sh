@@ -45,7 +45,7 @@ TOKEN_NAME="${TOKEN_NAME:-auto-token}"
 PROXMOX_TOKEN_PRIVSEP="${PROXMOX_TOKEN_PRIVSEP:-0}"
 PROXMOX_USER="${PROXMOX_USER:-root@pam}"
 PROXMOX_PASSWORD="${PROXMOX_PASSWORD:-}"
-PROXMOX_AUTH_PREFERENCE="${PROXMOX_AUTH_PREFERENCE:-password}"
+PROXMOX_AUTH_PREFERENCE="password"
 
 DEPLOY_APACHE="${DEPLOY_APACHE:-1}"
 DEPLOY_GLPI="${DEPLOY_GLPI:-1}"
@@ -54,7 +54,6 @@ DEPLOY_UPTIME="${DEPLOY_UPTIME:-1}"
 SSH_PUB_KEY=""
 PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
 PROXMOX_TOKEN_SECRET="${PROXMOX_TOKEN_SECRET:-}"
-AUTO_TOKEN_CREATED=0
 AUTH_MODE_SELECTED=""
 
 need_cmd() {
@@ -81,52 +80,6 @@ detect_or_create_ssh_key() {
   mkdir -p ssh
   ssh-keygen -t ed25519 -f "ssh/id_ed25519_terraform" -N "" -C "terraform-gsb" >/dev/null 2>&1
   cat "ssh/id_ed25519_terraform.pub"
-}
-
-setup_token_when_possible() {
-  if [[ $EUID -ne 0 ]] || ! command -v pveum >/dev/null 2>&1; then
-    return 1
-  fi
-
-  # Mode le plus robuste: token root@pam sans séparation de privilèges.
-  TOKEN_USER="${PROXMOX_USER}"
-  if [[ "$TOKEN_USER" != *"@"* ]]; then
-    TOKEN_USER="root@pam"
-  fi
-
-  pveum user token delete "$TOKEN_USER" "$TOKEN_NAME" >/dev/null 2>&1 || true
-  local token_output
-  token_output="$(pveum user token add "$TOKEN_USER" "$TOKEN_NAME" --privsep 0 --output-format json)"
-
-  PROXMOX_TOKEN_ID="${TOKEN_USER}!${TOKEN_NAME}"
-  PROXMOX_TOKEN_SECRET="$(echo "$token_output" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-  AUTO_TOKEN_CREATED=1
-
-  # Force explicit ACL on the token to satisfy provider permission checks.
-  pveum aclmod / -token "$PROXMOX_TOKEN_ID" -role Administrator >/dev/null 2>&1 || true
-
-  if [[ -z "$PROXMOX_TOKEN_SECRET" ]]; then
-    log_err "Failed to create Proxmox API token secret."
-    exit 1
-  fi
-}
-
-token_has_provider_level_access() {
-  local base_url status
-  base_url="${PROXMOX_API_URL%/api2/json}"
-  status="$(curl -k -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
-    "${base_url}/api2/json/access/users")"
-  [[ "$status" == "200" ]]
-}
-
-token_has_vm_monitor_access() {
-  local base_url status
-  base_url="${PROXMOX_API_URL%/api2/json}"
-  status="$(curl -k -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
-    "${base_url}/api2/json/nodes/${TARGET_NODE}/lxc")"
-  [[ "$status" == "200" ]]
 }
 
 password_has_provider_level_access() {
@@ -168,10 +121,6 @@ cleanup() {
 
   rm -f .env.local
   rm -f terraform/terraform.tfvars
-
-  if [[ $AUTO_TOKEN_CREATED -eq 1 && $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
-    pveum user token delete "$TOKEN_USER" "$TOKEN_NAME" >/dev/null 2>&1 || true
-  fi
 }
 
 write_env_file() {
@@ -200,6 +149,8 @@ write_tfvars() {
     tf_pm_token_id="$PROXMOX_TOKEN_ID"
     tf_pm_token_secret="$PROXMOX_TOKEN_SECRET"
   else
+    tf_pm_token_id=""
+    tf_pm_token_secret=""
     tf_pm_user="$PROXMOX_USER"
     tf_pm_password="$PROXMOX_PASSWORD"
   fi
@@ -314,35 +265,18 @@ main() {
   log_ok "SSH public key ready."
 
   log_title "Validation Auth Proxmox"
-
-  if [[ "$PROXMOX_AUTH_PREFERENCE" == "password" ]]; then
-    prompt_password_if_missing
-    if password_has_provider_level_access && password_has_vm_monitor_access; then
-      AUTH_MODE_SELECTED="password"
-      log_ok "Password auth validated with VM.Monitor access."
-    else
-      log_warn "Password auth failed, trying token auth fallback..."
-      PROXMOX_PASSWORD=""
-    fi
+  prompt_password_if_missing
+  if [[ $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
+    pveum aclmod / -user "$PROXMOX_USER" -role Administrator >/dev/null 2>&1 || true
   fi
-
-  if [[ -z "$AUTH_MODE_SELECTED" ]]; then
-    if [[ -z "$PROXMOX_TOKEN_ID" || -z "$PROXMOX_TOKEN_SECRET" ]]; then
-      log_info "Creating Proxmox token automatically..."
-      if ! setup_token_when_possible; then
-        log_err "Could not auto-create token. Export PROXMOX_TOKEN_ID/PROXMOX_TOKEN_SECRET, or run as root on Proxmox host."
-        exit 1
-      fi
-      log_ok "Token created: ${PROXMOX_TOKEN_ID}"
-    fi
-
-    if token_has_provider_level_access && token_has_vm_monitor_access; then
-      AUTH_MODE_SELECTED="token"
-      log_ok "Token auth validated with VM.Monitor access."
-    else
-      log_err "Token auth still missing VM.Monitor/provider access."
-      exit 1
-    fi
+  if password_has_provider_level_access && password_has_vm_monitor_access; then
+    AUTH_MODE_SELECTED="password"
+    PROXMOX_TOKEN_ID=""
+    PROXMOX_TOKEN_SECRET=""
+    log_ok "Password auth validated with VM.Monitor access."
+  else
+    log_err "Password auth failed (provider or VM.Monitor access missing)."
+    exit 1
   fi
 
   log_title "Génération Config"
