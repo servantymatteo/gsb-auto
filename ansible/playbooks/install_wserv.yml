@@ -71,7 +71,10 @@
       ansible.windows.win_reboot:
         reboot_timeout: 3600
         post_reboot_delay: 60
-      when: ad_promote.stdout is search("PROMOTED")
+      when: >
+        ('PROMOTED' in (ad_promote.output | default([]) | join(' ')))
+        or ('PROMOTED' in (ad_promote.host_out | default('')))
+        or ('PROMOTED' in (ad_promote.stdout | default('')))
 
     - name: Vérifier service IIS
       ansible.windows.win_service:
