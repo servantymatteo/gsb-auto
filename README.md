@@ -65,10 +65,13 @@ Lancez simplement le script de configuration :
 Le script vous demandera :
 1. Le préfixe des containers (ex: SIO2027)
 2. Quels services vous voulez installer (Apache, GLPI, etc.)
-3. Les ressources pour chaque container (CPU, RAM, disque)
+3. Si vous voulez garder les ressources recommandées (Entrée = oui)
 4. Si vous voulez lancer le déploiement immédiatement (Entrée = oui)
 
 Le déploiement via `setup.sh` gère automatiquement :
+- la création de `.env.local` (depuis `.env.local.example` si présent)
+- la demande uniquement des variables Proxmox vraiment manquantes
+- la détection auto de la clé SSH publique (ou génération dans `ssh/`)
 - `terraform init`
 - jusqu'à 3 tentatives de `terraform apply`
 

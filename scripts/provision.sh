@@ -15,6 +15,16 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SSH_KEY="$PROJECT_ROOT/ssh/id_ed25519_terraform"
+if [[ ! -f "$SSH_KEY" ]]; then
+  if [[ -f "$HOME/.ssh/id_ed25519" ]]; then
+    SSH_KEY="$HOME/.ssh/id_ed25519"
+  elif [[ -f "$HOME/.ssh/id_rsa" ]]; then
+    SSH_KEY="$HOME/.ssh/id_rsa"
+  else
+    echo -e "${RED}   ✗ Clé SSH introuvable (attendue: $PROJECT_ROOT/ssh/id_ed25519_terraform ou ~/.ssh/*)${NC}"
+    exit 1
+  fi
+fi
 ANSIBLE_CONFIG="$PROJECT_ROOT/ansible/ansible.cfg"
 
 echo ""
