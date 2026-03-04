@@ -45,6 +45,7 @@ TOKEN_NAME="${TOKEN_NAME:-auto-token}"
 PROXMOX_TOKEN_PRIVSEP="${PROXMOX_TOKEN_PRIVSEP:-0}"
 PROXMOX_USER="${PROXMOX_USER:-root@pam}"
 PROXMOX_PASSWORD="${PROXMOX_PASSWORD:-}"
+PROXMOX_AUTH_PREFERENCE="${PROXMOX_AUTH_PREFERENCE:-password}"
 
 DEPLOY_APACHE="${DEPLOY_APACHE:-1}"
 DEPLOY_GLPI="${DEPLOY_GLPI:-1}"
@@ -54,6 +55,7 @@ SSH_PUB_KEY=""
 PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
 PROXMOX_TOKEN_SECRET="${PROXMOX_TOKEN_SECRET:-}"
 AUTO_TOKEN_CREATED=0
+AUTH_MODE_SELECTED=""
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -194,7 +196,7 @@ write_tfvars() {
   local tf_pm_token_id=""
   local tf_pm_token_secret=""
 
-  if [[ -n "${PROXMOX_TOKEN_ID}" && -n "${PROXMOX_TOKEN_SECRET}" ]]; then
+  if [[ "$AUTH_MODE_SELECTED" == "token" && -n "${PROXMOX_TOKEN_ID}" && -n "${PROXMOX_TOKEN_SECRET}" ]]; then
     tf_pm_token_id="$PROXMOX_TOKEN_ID"
     tf_pm_token_secret="$PROXMOX_TOKEN_SECRET"
   else
@@ -307,28 +309,36 @@ main() {
   SSH_PUB_KEY="$(detect_or_create_ssh_key)"
   log_ok "SSH public key ready."
 
-  if [[ -z "$PROXMOX_TOKEN_ID" || -z "$PROXMOX_TOKEN_SECRET" ]]; then
-    log_info "Creating Proxmox token automatically..."
-    if ! setup_token_when_possible; then
-      log_err "Could not auto-create token. Export PROXMOX_TOKEN_ID/PROXMOX_TOKEN_SECRET, or run as root on Proxmox host."
-      exit 1
+  log_title "Validation Auth Proxmox"
+
+  if [[ "$PROXMOX_AUTH_PREFERENCE" == "password" ]]; then
+    prompt_password_if_missing
+    if password_has_provider_level_access && password_has_vm_monitor_access; then
+      AUTH_MODE_SELECTED="password"
+      log_ok "Password auth validated with VM.Monitor access."
+    else
+      log_warn "Password auth failed, trying token auth fallback..."
+      PROXMOX_PASSWORD=""
     fi
-    log_ok "Token created: ${PROXMOX_TOKEN_ID}"
   fi
 
-  log_title "Validation Auth Proxmox"
-  if ! token_has_provider_level_access || ! token_has_vm_monitor_access; then
-    log_warn "Token missing required provider permissions (including VM.Monitor). Switching to password auth."
-    PROXMOX_TOKEN_ID=""
-    PROXMOX_TOKEN_SECRET=""
-    prompt_password_if_missing
-    if [[ -z "$PROXMOX_PASSWORD" ]] || ! password_has_provider_level_access || ! password_has_vm_monitor_access; then
-      log_err "Password fallback failed (provider or VM.Monitor access missing). Set PROXMOX_PASSWORD and retry."
+  if [[ -z "$AUTH_MODE_SELECTED" ]]; then
+    if [[ -z "$PROXMOX_TOKEN_ID" || -z "$PROXMOX_TOKEN_SECRET" ]]; then
+      log_info "Creating Proxmox token automatically..."
+      if ! setup_token_when_possible; then
+        log_err "Could not auto-create token. Export PROXMOX_TOKEN_ID/PROXMOX_TOKEN_SECRET, or run as root on Proxmox host."
+        exit 1
+      fi
+      log_ok "Token created: ${PROXMOX_TOKEN_ID}"
+    fi
+
+    if token_has_provider_level_access && token_has_vm_monitor_access; then
+      AUTH_MODE_SELECTED="token"
+      log_ok "Token auth validated with VM.Monitor access."
+    else
+      log_err "Token auth still missing VM.Monitor/provider access."
       exit 1
     fi
-    log_ok "Password auth validated with VM.Monitor access."
-  else
-    log_ok "Token auth validated with VM.Monitor access."
   fi
 
   log_title "Génération Config"
