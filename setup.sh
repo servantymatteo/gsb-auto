@@ -21,13 +21,8 @@ log_err()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
 prompt_password_if_missing() {
   if [[ -z "${PROXMOX_PASSWORD:-}" || "${PROXMOX_PASSWORD}" == "ton_mdp" ]]; then
-    if [[ -t 0 ]]; then
-      read -r -s -p "Mot de passe Proxmox pour ${PROXMOX_USER}: " PROXMOX_PASSWORD
-      echo ""
-    else
-      log_err "Mot de passe Proxmox manquant. Lance en interactif ou exporte PROXMOX_PASSWORD."
-      exit 1
-    fi
+    log_err "Mot de passe Proxmox manquant (aucune invite interactive). Exporte PROXMOX_PASSWORD si tu veux le fallback password."
+    exit 1
   fi
 }
 
@@ -586,8 +581,7 @@ main() {
 
   prompt_deployment_plan_if_interactive
   if [[ "$DEPLOY_WSERV" == "1" ]]; then
-    PROXMOX_AUTH_PREFERENCE="password"
-    log_info "wSERV sélectionné: auth Proxmox forcée en mode mot de passe."
+    log_info "wSERV sélectionné."
   fi
 
   log_title "Validation Auth Proxmox"
@@ -606,24 +600,26 @@ main() {
       AUTH_MODE_SELECTED="token"
       log_ok "Token auth validated with VM.Monitor access."
     else
-      log_warn "Token auth invalid or missing VM.Monitor. Switching to password."
-      PROXMOX_TOKEN_ID=""
-      PROXMOX_TOKEN_SECRET=""
+      log_warn "Token auth invalid ou permissions insuffisantes."
     fi
   fi
 
   if [[ -z "$AUTH_MODE_SELECTED" ]]; then
-    prompt_password_if_missing
-    if [[ $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
-      pveum aclmod / -user "$PROXMOX_USER" -role Administrator >/dev/null 2>&1 || true
+    # Fallback password uniquement si explicitement fourni (pas d'invite interactive).
+    if [[ -n "${PROXMOX_PASSWORD:-}" && "${PROXMOX_PASSWORD}" != "ton_mdp" ]]; then
+      if [[ $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
+        pveum aclmod / -user "$PROXMOX_USER" -role Administrator >/dev/null 2>&1 || true
+      fi
+      if password_has_provider_level_access && password_has_vm_monitor_access; then
+        AUTH_MODE_SELECTED="password"
+        PROXMOX_TOKEN_ID=""
+        PROXMOX_TOKEN_SECRET=""
+        log_ok "Password auth validated with VM.Monitor access."
+      fi
     fi
-    if password_has_provider_level_access && password_has_vm_monitor_access; then
-      AUTH_MODE_SELECTED="password"
-      PROXMOX_TOKEN_ID=""
-      PROXMOX_TOKEN_SECRET=""
-      log_ok "Password auth validated with VM.Monitor access."
-    else
-      log_err "Password auth failed (provider or VM.Monitor access missing)."
+
+    if [[ -z "$AUTH_MODE_SELECTED" ]]; then
+      log_err "Authentification Proxmox impossible sans prompt. Fournis un token valide, ou PROXMOX_PASSWORD en variable d'environnement."
       exit 1
     fi
   fi
