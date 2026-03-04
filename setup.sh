@@ -70,6 +70,7 @@ WSERV_MEMORY="${WSERV_MEMORY:-6144}"
 WSERV_DISK="${WSERV_DISK:-40G}"
 WSERV_ADMIN_USER="${WSERV_ADMIN_USER:-Administrateur}"
 WSERV_ADMIN_PASSWORD="${WSERV_ADMIN_PASSWORD:-Formation13@}"
+WINDOWS_TEMPLATE_VMID="${WINDOWS_TEMPLATE_VMID:-2000}"
 
 SSH_PUB_KEY=""
 PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
@@ -319,6 +320,7 @@ prompt_deployment_plan_if_interactive() {
     fi
     if [[ "$DEPLOY_WSERV" == "1" ]]; then
       log_info "Configuration Windows Server"
+      prompt_with_default WINDOWS_TEMPLATE_VMID "VMID template Windows à cloner" "$WINDOWS_TEMPLATE_VMID"
       prompt_with_default WSERV_NAME "Nom VM Windows" "$WSERV_NAME"
       prompt_with_default WSERV_VM_ID "VMID Windows" "$WSERV_VM_ID"
       prompt_with_default WSERV_CORES "CPU Windows" "$WSERV_CORES"
@@ -434,6 +436,8 @@ EOF
 
   cat >> terraform/terraform.tfvars <<EOF
 }
+
+windows_template_vmid = $WINDOWS_TEMPLATE_VMID
 EOF
 }
 
