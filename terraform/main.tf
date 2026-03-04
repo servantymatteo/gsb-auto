@@ -107,7 +107,7 @@ resource "proxmox_virtual_environment_vm" "windows" {
   }
 
   agent {
-    enabled = true
+    enabled = var.windows_enable_agent
     timeout = "5m"
   }
 

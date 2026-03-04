@@ -115,6 +115,12 @@ variable "windows_safe_mode_password" {
   default     = "Formation13@"
 }
 
+variable "windows_enable_agent" {
+  description = "Activer QEMU guest agent pour les VMs Windows"
+  type        = bool
+  default     = false
+}
+
 variable "target_node" {
   description = "Nom du nœud Proxmox cible"
   type        = string

@@ -69,6 +69,8 @@ WINDOWS_TEMPLATE_VMID="${WINDOWS_TEMPLATE_VMID:-2000}"
 WINDOWS_DOMAIN_NAME="${WINDOWS_DOMAIN_NAME:-gsb.local}"
 WINDOWS_DOMAIN_NETBIOS="${WINDOWS_DOMAIN_NETBIOS:-GSB}"
 WINDOWS_SAFE_MODE_PASSWORD="${WINDOWS_SAFE_MODE_PASSWORD:-Formation13@}"
+WINDOWS_ENABLE_AGENT="${WINDOWS_ENABLE_AGENT:-0}"
+WSERV_IP="${WSERV_IP:-}"
 
 SSH_PUB_KEY=""
 PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
@@ -330,9 +332,17 @@ prompt_deployment_plan_if_interactive() {
       prompt_with_default WSERV_DISK "Disque Windows" "$WSERV_DISK"
       prompt_with_default WSERV_ADMIN_USER "Utilisateur WinRM" "$WSERV_ADMIN_USER"
       prompt_with_default WSERV_ADMIN_PASSWORD "Mot de passe WinRM" "$WSERV_ADMIN_PASSWORD"
+      prompt_with_default WSERV_IP "IP Windows (optionnel, recommandé)" "$WSERV_IP"
       prompt_with_default WINDOWS_DOMAIN_NAME "Nom domaine AD (DNS)" "$WINDOWS_DOMAIN_NAME"
       prompt_with_default WINDOWS_DOMAIN_NETBIOS "Nom domaine AD (NetBIOS)" "$WINDOWS_DOMAIN_NETBIOS"
       prompt_with_default WINDOWS_SAFE_MODE_PASSWORD "Mot de passe DSRM AD" "$WINDOWS_SAFE_MODE_PASSWORD"
+      local qga_input="N"
+      read -r -p "Le template Windows a QEMU Guest Agent actif ? (o/N): " qga_input
+      if [[ "$qga_input" == "o" || "$qga_input" == "O" ]]; then
+        WINDOWS_ENABLE_AGENT=1
+      else
+        WINDOWS_ENABLE_AGENT=0
+      fi
     fi
   fi
 }
@@ -448,6 +458,7 @@ windows_admin_password = "$WSERV_ADMIN_PASSWORD"
 windows_domain_name = "$WINDOWS_DOMAIN_NAME"
 windows_domain_netbios = "$WINDOWS_DOMAIN_NETBIOS"
 windows_safe_mode_password = "$WINDOWS_SAFE_MODE_PASSWORD"
+windows_enable_agent = $([[ "$WINDOWS_ENABLE_AGENT" == "1" ]] && echo "true" || echo "false")
 EOF
 }
 
@@ -488,6 +499,7 @@ print_service_urls() {
   ip_uptime="$(resolve_container_ip "$UPTIME_NAME")"
   ip_wserv="$(terraform state show "proxmox_virtual_environment_vm.windows[\"$WSERV_NAME\"]" 2>/dev/null | grep -E 'ipv4_addresses|ipv4' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '^127\.' | head -n 1 || true)"
   popd >/dev/null
+  [[ -z "$ip_wserv" && -n "$WSERV_IP" ]] && ip_wserv="$WSERV_IP"
 
   if [[ "$DEPLOY_APACHE" == "1" ]]; then
     echo ""
@@ -553,6 +565,7 @@ provision_windows_after_apply() {
   pushd terraform >/dev/null
   wip="$(terraform state show "proxmox_virtual_environment_vm.windows[\"$WSERV_NAME\"]" 2>/dev/null | grep -E 'ipv4_addresses|ipv4' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '^127\.' | head -n 1 || true)"
   popd >/dev/null
+  [[ -z "$wip" && -n "$WSERV_IP" ]] && wip="$WSERV_IP"
 
   if [[ -z "$wip" ]]; then
     log_warn "IP Windows non trouvée, provisioning Windows ignoré."

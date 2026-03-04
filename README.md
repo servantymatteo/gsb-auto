@@ -148,6 +148,7 @@ terraform apply --auto-approve
   - Ressources recommandées : 4 CPU, 6144 MB RAM, 40G disque
   - Prérequis : template Windows prêt (VMID demandé dans `setup.sh`) avec WinRM activé
   - Le domaine AD DS est configuré automatiquement via Ansible/WinRM
+  - Si le template n'a pas QEMU Guest Agent, laissez l'option QGA désactivée et renseignez l'IP Windows manuellement dans `setup.sh`
 
 ## Ajouter un nouveau service
 
