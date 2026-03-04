@@ -185,12 +185,15 @@ get_ip_from_terraform_state() {
 
 get_ip_from_proxmox_api() {
   local container_full_name="$1"
-  local base_url auth_response ticket lxc_list vmid interfaces ip
+  local base_url auth_response ticket lxc_list vmid interfaces ip token_id token_secret
 
   base_url="${PROXMOX_API_URL%/api2/json}"
 
-  if [[ "$AUTH_MODE_SELECTED" == "token" && -n "$PROXMOX_TOKEN_ID" && -n "$PROXMOX_TOKEN_SECRET" ]]; then
-    lxc_list="$(curl -k -s -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+  token_id="${PROXMOX_TOKEN_ID:-}"
+  token_secret="${PROXMOX_TOKEN_SECRET:-}"
+
+  if [[ "$AUTH_MODE_SELECTED" == "token" && -n "$token_id" && -n "$token_secret" ]]; then
+    lxc_list="$(curl -k -s -H "Authorization: PVEAPIToken=${token_id}=${token_secret}" \
       "${base_url}/api2/json/nodes/${TARGET_NODE}/lxc" 2>/dev/null || true)"
   else
     auth_response="$(curl -k -s \
@@ -207,8 +210,8 @@ get_ip_from_proxmox_api() {
     | grep -o '"vmid":[0-9]*' | grep -o '[0-9]*' | head -n 1 || true)"
   [[ -z "$vmid" ]] && return 0
 
-  if [[ "$AUTH_MODE_SELECTED" == "token" && -n "$PROXMOX_TOKEN_ID" && -n "$PROXMOX_TOKEN_SECRET" ]]; then
-    interfaces="$(curl -k -s -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+  if [[ "$AUTH_MODE_SELECTED" == "token" && -n "$token_id" && -n "$token_secret" ]]; then
+    interfaces="$(curl -k -s -H "Authorization: PVEAPIToken=${token_id}=${token_secret}" \
       "${base_url}/api2/json/nodes/${TARGET_NODE}/lxc/${vmid}/interfaces" 2>/dev/null || true)"
   else
     interfaces="$(curl -k -s -H "Cookie: PVEAuthCookie=${ticket}" \
@@ -229,6 +232,28 @@ resolve_container_ip() {
   if [[ -z "$ip" ]]; then
     ip="$(get_ip_from_proxmox_api "$full_name")"
   fi
+  echo "$ip"
+}
+
+resolve_windows_ip() {
+  local ip=""
+
+  pushd terraform >/dev/null
+  ip="$(terraform state show "proxmox_virtual_environment_vm.windows[\"$WSERV_NAME\"]" 2>/dev/null \
+    | grep -E 'ipv4_addresses|ipv4' \
+    | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' \
+    | grep -v '^127\.' \
+    | head -n 1 || true)"
+  popd >/dev/null
+
+  if [[ -z "$ip" ]] && [[ $EUID -eq 0 ]] && command -v qm >/dev/null 2>&1; then
+    ip="$(qm guest cmd "$WSERV_VM_ID" network-get-interfaces 2>/dev/null \
+      | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' \
+      | grep -v '^127\.' \
+      | head -n 1 || true)"
+  fi
+
+  [[ -z "$ip" && -n "$WSERV_IP" ]] && ip="$WSERV_IP"
   echo "$ip"
 }
 
@@ -465,7 +490,6 @@ EOF
 run_terraform() {
   # Empêche les variables d'environnement Proxmox de surcharger le mode d'auth choisi.
   unset PM_API_TOKEN_ID PM_API_TOKEN_SECRET PM_USER PM_PASS PM_PASSWORD
-  unset PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET
   unset PROXMOX_VE_API_TOKEN PROXMOX_VE_USERNAME PROXMOX_VE_PASSWORD PROXMOX_VE_AUTH_TICKET PROXMOX_VE_CSRF_PREVENTION_TOKEN
 
   pushd terraform >/dev/null
@@ -497,9 +521,8 @@ print_service_urls() {
   ip_web="$(resolve_container_ip "$WEB_NAME")"
   ip_glpi="$(resolve_container_ip "$GLPI_NAME")"
   ip_uptime="$(resolve_container_ip "$UPTIME_NAME")"
-  ip_wserv="$(terraform state show "proxmox_virtual_environment_vm.windows[\"$WSERV_NAME\"]" 2>/dev/null | grep -E 'ipv4_addresses|ipv4' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '^127\.' | head -n 1 || true)"
   popd >/dev/null
-  [[ -z "$ip_wserv" && -n "$WSERV_IP" ]] && ip_wserv="$WSERV_IP"
+  ip_wserv="$(resolve_windows_ip)"
 
   if [[ "$DEPLOY_APACHE" == "1" ]]; then
     echo ""
@@ -562,10 +585,7 @@ provision_windows_after_apply() {
   fi
 
   local wip=""
-  pushd terraform >/dev/null
-  wip="$(terraform state show "proxmox_virtual_environment_vm.windows[\"$WSERV_NAME\"]" 2>/dev/null | grep -E 'ipv4_addresses|ipv4' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '^127\.' | head -n 1 || true)"
-  popd >/dev/null
-  [[ -z "$wip" && -n "$WSERV_IP" ]] && wip="$WSERV_IP"
+  wip="$(resolve_windows_ip)"
 
   if [[ -z "$wip" ]]; then
     log_warn "IP Windows non trouvée, provisioning Windows ignoré."
