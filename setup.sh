@@ -74,7 +74,7 @@ prompt_required() {
 
 generate_proxmox_token_secret() {
   local token_id="$1"
-  local user_part token_name generated_name out generated_secret
+  local user_part token_name generated_name out generated_secret full_token_id
 
   if [[ $EUID -ne 0 ]] || ! command -v pveum >/dev/null 2>&1; then
     return 1
@@ -92,8 +92,15 @@ generate_proxmox_token_secret() {
   generated_secret=$(echo "$out" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 
   if [[ -n "$generated_secret" ]]; then
-    PROXMOX_TOKEN_ID="${user_part}!${generated_name}"
+    full_token_id="${user_part}!${generated_name}"
+    PROXMOX_TOKEN_ID="$full_token_id"
     PROXMOX_TOKEN_SECRET="$generated_secret"
+
+    # Applique explicitement les permissions token pour éviter les erreurs API (ex: VM.Monitor).
+    pveum aclmod / -token "$full_token_id" -role PVEAdmin >/dev/null 2>&1 || \
+    pveum aclmod / --tokens "$full_token_id" --roles PVEAdmin >/dev/null 2>&1 || \
+    pveum aclmod / -user "$user_part" -role PVEAdmin >/dev/null 2>&1 || true
+
     return 0
   fi
 
