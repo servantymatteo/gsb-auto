@@ -21,6 +21,7 @@ MAX_APPLY_ATTEMPTS=3
 AUTO_GENERATED_TOKEN=0
 AUTO_GENERATED_TOKEN_ID=""
 PROXMOX_TOKEN_ROLE="Administrator"
+PROXMOX_AUTH_MODE="token"
 
 START_TIME=$(date +%s)
 ENV_FILE=".env.local"
@@ -176,6 +177,35 @@ proxmox_token_has_vm_monitor() {
   [[ "$status" == "200" ]]
 }
 
+proxmox_password_has_vm_monitor() {
+  local api_url="$1"
+  local username="$2"
+  local password="$3"
+  local target_node="$4"
+  local base_url auth_response ticket status
+
+  if [[ -z "$api_url" || -z "$username" || -z "$password" || -z "$target_node" ]]; then
+    return 1
+  fi
+
+  base_url="${api_url%/api2/json}"
+  auth_response=$(curl -k -s \
+    --data-urlencode "username=${username}" \
+    --data-urlencode "password=${password}" \
+    "${base_url}/api2/json/access/ticket")
+  ticket=$(echo "$auth_response" | sed -n 's/.*"ticket"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+
+  if [[ -z "$ticket" ]]; then
+    return 1
+  fi
+
+  status=$(curl -k -s -o /dev/null -w "%{http_code}" \
+    -H "Cookie: PVEAuthCookie=${ticket}" \
+    "${base_url}/api2/json/nodes/${target_node}/lxc")
+
+  [[ "$status" == "200" ]]
+}
+
 cleanup_everything() {
   echo ""
   echo -e "${YELLOW}${ARROW} Nettoyage final (tokens/fichiers)...${NC}"
@@ -239,6 +269,9 @@ write_env_file() {
   cat > "$ENV_FILE" <<EOF
 # Généré automatiquement par setup.sh le $(date)
 PROXMOX_API_URL=$PROXMOX_API_URL
+PROXMOX_AUTH_MODE=$PROXMOX_AUTH_MODE
+PROXMOX_USER=$PROXMOX_USER
+PROXMOX_PASSWORD=$PROXMOX_PASSWORD
 PROXMOX_TOKEN_ID=$PROXMOX_TOKEN_ID
 PROXMOX_TOKEN_SECRET=$PROXMOX_TOKEN_SECRET
 PROXMOX_TOKEN_PRIVSEP=$PROXMOX_TOKEN_PRIVSEP
@@ -266,6 +299,8 @@ fi
 source "$ENV_FILE"
 
 PROXMOX_API_URL=$(default_if_empty "$PROXMOX_API_URL" "https://192.168.68.200:8006/api2/json")
+PROXMOX_AUTH_MODE=$(default_if_empty "$PROXMOX_AUTH_MODE" "token")
+PROXMOX_USER=$(default_if_empty "$PROXMOX_USER" "root@pam")
 PROXMOX_TOKEN_PRIVSEP=$(default_if_empty "$PROXMOX_TOKEN_PRIVSEP" "0")
 TARGET_NODE=$(default_if_empty "$TARGET_NODE" "proxmox")
 TEMPLATE_NAME=$(default_if_empty "$TEMPLATE_NAME" "debian-12-standard_12.12-1_amd64.tar.zst")
@@ -277,48 +312,66 @@ if [[ "$PROXMOX_TOKEN_PRIVSEP" != "0" && "$PROXMOX_TOKEN_PRIVSEP" != "1" ]]; the
   PROXMOX_TOKEN_PRIVSEP="0"
 fi
 
+if [[ "$PROXMOX_AUTH_MODE" != "token" && "$PROXMOX_AUTH_MODE" != "password" ]]; then
+  PROXMOX_AUTH_MODE="token"
+fi
+
 if is_placeholder "$PROXMOX_API_URL"; then
   prompt_required "PROXMOX_API_URL" "URL API Proxmox (ex: https://IP:8006/api2/json)" "$PROXMOX_API_URL" "false"
 fi
 
-if is_placeholder "$PROXMOX_TOKEN_ID"; then
-  prompt_required "PROXMOX_TOKEN_ID" "Token ID Proxmox (ex: root@pam!terraform)" "$PROXMOX_TOKEN_ID" "false"
-fi
-
-if [[ $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
-  if generate_proxmox_token_secret "$PROXMOX_TOKEN_ID"; then
-    echo -e "${GREEN}${CHECK} Token Proxmox éphémère généré automatiquement (privsep=${PROXMOX_TOKEN_PRIVSEP}) : ${PROXMOX_TOKEN_ID}${NC}"
-  else
-    echo -e "${RED}${CROSS} Impossible de générer un token Proxmox éphémère${NC}"
-    exit 1
+if [[ "$PROXMOX_AUTH_MODE" == "token" ]]; then
+  if is_placeholder "$PROXMOX_TOKEN_ID"; then
+    prompt_required "PROXMOX_TOKEN_ID" "Token ID Proxmox (ex: root@pam!terraform)" "$PROXMOX_TOKEN_ID" "false"
   fi
-elif is_placeholder "$PROXMOX_TOKEN_SECRET"; then
-  prompt_required "PROXMOX_TOKEN_SECRET" "Token secret Proxmox" "" "true"
-fi
 
-# Si le script tourne en admin sur Proxmox, applique les ACL nécessaires même pour un token existant.
-if ensure_proxmox_token_acl "$PROXMOX_TOKEN_ID"; then
-  echo -e "${GREEN}${CHECK} Permissions token Proxmox vérifiées/appliquées (${PROXMOX_TOKEN_ROLE})${NC}"
-fi
+  if [[ $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
+    if generate_proxmox_token_secret "$PROXMOX_TOKEN_ID"; then
+      echo -e "${GREEN}${CHECK} Token Proxmox éphémère généré automatiquement (privsep=${PROXMOX_TOKEN_PRIVSEP}) : ${PROXMOX_TOKEN_ID}${NC}"
+    else
+      echo -e "${YELLOW}${ARROW} Impossible de générer un token Proxmox éphémère, fallback mot de passe...${NC}"
+      PROXMOX_AUTH_MODE="password"
+    fi
+  elif is_placeholder "$PROXMOX_TOKEN_SECRET"; then
+    prompt_required "PROXMOX_TOKEN_SECRET" "Token secret Proxmox" "" "true"
+  fi
 
-if ! proxmox_token_is_valid "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET"; then
-  echo -e "${YELLOW}${ARROW} Token Proxmox invalide, tentative de régénération automatique...${NC}"
-  if generate_proxmox_token_secret "$PROXMOX_TOKEN_ID" && proxmox_token_is_valid "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET"; then
-    echo -e "${GREEN}${CHECK} Nouveau token Proxmox valide: ${PROXMOX_TOKEN_ID}${NC}"
-  else
-    echo -e "${RED}${CROSS} Authentification Proxmox invalide (token)${NC}"
-    echo -e "${YELLOW}Vérifie PROXMOX_API_URL et les droits du token, puis relance.${NC}"
-    exit 1
+  if [[ "$PROXMOX_AUTH_MODE" == "token" ]] && ensure_proxmox_token_acl "$PROXMOX_TOKEN_ID"; then
+    echo -e "${GREEN}${CHECK} Permissions token Proxmox vérifiées/appliquées (${PROXMOX_TOKEN_ROLE})${NC}"
+  fi
+
+  if [[ "$PROXMOX_AUTH_MODE" == "token" ]] && ! proxmox_token_is_valid "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET"; then
+    echo -e "${YELLOW}${ARROW} Token Proxmox invalide, tentative de régénération automatique...${NC}"
+    if generate_proxmox_token_secret "$PROXMOX_TOKEN_ID" && proxmox_token_is_valid "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET"; then
+      echo -e "${GREEN}${CHECK} Nouveau token Proxmox valide: ${PROXMOX_TOKEN_ID}${NC}"
+    else
+      echo -e "${YELLOW}${ARROW} Échec du mode token, bascule en mot de passe...${NC}"
+      PROXMOX_AUTH_MODE="password"
+    fi
+  fi
+
+  if [[ "$PROXMOX_AUTH_MODE" == "token" ]] && ! proxmox_token_has_vm_monitor "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET" "$TARGET_NODE"; then
+    echo -e "${YELLOW}${ARROW} Token sans droits VM.Monitor, tentative de régénération...${NC}"
+    if generate_proxmox_token_secret "$PROXMOX_TOKEN_ID" && proxmox_token_has_vm_monitor "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET" "$TARGET_NODE"; then
+      echo -e "${GREEN}${CHECK} Token Proxmox avec droits VM.Monitor prêt${NC}"
+    else
+      echo -e "${YELLOW}${ARROW} Toujours insuffisant en mode token, bascule en mot de passe...${NC}"
+      PROXMOX_AUTH_MODE="password"
+    fi
   fi
 fi
 
-if ! proxmox_token_has_vm_monitor "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET" "$TARGET_NODE"; then
-  echo -e "${YELLOW}${ARROW} Token sans droits VM.Monitor, régénération...${NC}"
-  if generate_proxmox_token_secret "$PROXMOX_TOKEN_ID" && proxmox_token_has_vm_monitor "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET" "$TARGET_NODE"; then
-    echo -e "${GREEN}${CHECK} Token Proxmox avec droits VM.Monitor prêt${NC}"
+if [[ "$PROXMOX_AUTH_MODE" == "password" ]]; then
+  prompt_required "PROXMOX_USER" "Utilisateur Proxmox (ex: root@pam)" "$PROXMOX_USER" "false"
+  if is_placeholder "$PROXMOX_PASSWORD"; then
+    prompt_required "PROXMOX_PASSWORD" "Mot de passe Proxmox" "" "true"
+  fi
+  if proxmox_password_has_vm_monitor "$PROXMOX_API_URL" "$PROXMOX_USER" "$PROXMOX_PASSWORD" "$TARGET_NODE"; then
+    echo -e "${GREEN}${CHECK} Authentification Proxmox en mode mot de passe validée${NC}"
+    PROXMOX_TOKEN_ID=""
+    PROXMOX_TOKEN_SECRET=""
   else
-    echo -e "${RED}${CROSS} Permissions insuffisantes sur le token Proxmox (VM.Monitor)${NC}"
-    echo -e "${YELLOW}Vérifie les droits API de l'utilisateur (${PROXMOX_TOKEN_ID%%!*}) sur le noeud ${TARGET_NODE}.${NC}"
+    echo -e "${RED}${CROSS} Échec authentification Proxmox en mode mot de passe${NC}"
     exit 1
   fi
 fi
@@ -439,6 +492,8 @@ cat > terraform/terraform.tfvars <<EOF
 pm_api_url = "$PROXMOX_API_URL"
 pm_api_token_id     = "$PROXMOX_TOKEN_ID"
 pm_api_token_secret = "$PROXMOX_TOKEN_SECRET"
+pm_user             = "$PROXMOX_USER"
+pm_password         = "$PROXMOX_PASSWORD"
 
 vm_name       = "$VM_PREFIX"
 target_node   = "$TARGET_NODE"
