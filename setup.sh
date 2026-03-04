@@ -189,12 +189,25 @@ EOF
 }
 
 write_tfvars() {
+  local tf_pm_user=""
+  local tf_pm_password=""
+  local tf_pm_token_id=""
+  local tf_pm_token_secret=""
+
+  if [[ -n "${PROXMOX_TOKEN_ID}" && -n "${PROXMOX_TOKEN_SECRET}" ]]; then
+    tf_pm_token_id="$PROXMOX_TOKEN_ID"
+    tf_pm_token_secret="$PROXMOX_TOKEN_SECRET"
+  else
+    tf_pm_user="$PROXMOX_USER"
+    tf_pm_password="$PROXMOX_PASSWORD"
+  fi
+
   cat > terraform/terraform.tfvars <<EOF
 pm_api_url = "$PROXMOX_API_URL"
-pm_api_token_id     = "$PROXMOX_TOKEN_ID"
-pm_api_token_secret = "$PROXMOX_TOKEN_SECRET"
-pm_user             = "$PROXMOX_USER"
-pm_password         = "$PROXMOX_PASSWORD"
+pm_api_token_id     = "$tf_pm_token_id"
+pm_api_token_secret = "$tf_pm_token_secret"
+pm_user             = "$tf_pm_user"
+pm_password         = "$tf_pm_password"
 
 vm_name       = "$VM_PREFIX"
 target_node   = "$TARGET_NODE"
