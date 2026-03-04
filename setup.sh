@@ -50,6 +50,7 @@ PROXMOX_AUTH_PREFERENCE="${PROXMOX_AUTH_PREFERENCE:-token}"
 DEPLOY_APACHE="${DEPLOY_APACHE:-1}"
 DEPLOY_GLPI="${DEPLOY_GLPI:-1}"
 DEPLOY_UPTIME="${DEPLOY_UPTIME:-1}"
+DEPLOY_WSERV="${DEPLOY_WSERV:-0}"
 WEB_NAME="${WEB_NAME:-web}"
 WEB_CORES="${WEB_CORES:-2}"
 WEB_MEMORY="${WEB_MEMORY:-2048}"
@@ -62,6 +63,13 @@ UPTIME_NAME="${UPTIME_NAME:-monitoring}"
 UPTIME_CORES="${UPTIME_CORES:-2}"
 UPTIME_MEMORY="${UPTIME_MEMORY:-2048}"
 UPTIME_DISK="${UPTIME_DISK:-15G}"
+WSERV_NAME="${WSERV_NAME:-wserv}"
+WSERV_VM_ID="${WSERV_VM_ID:-201}"
+WSERV_CORES="${WSERV_CORES:-4}"
+WSERV_MEMORY="${WSERV_MEMORY:-6144}"
+WSERV_DISK="${WSERV_DISK:-40G}"
+WSERV_ADMIN_USER="${WSERV_ADMIN_USER:-Administrateur}"
+WSERV_ADMIN_PASSWORD="${WSERV_ADMIN_PASSWORD:-Formation13@}"
 
 SSH_PUB_KEY=""
 PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
@@ -261,22 +269,25 @@ prompt_deployment_plan_if_interactive() {
   echo "  [1] Apache"
   echo "  [2] GLPI"
   echo "  [3] Uptime Kuma"
+  echo "  [4] Windows Server"
 
   local services_input=""
-  read -r -p "Services à déployer (ex: 1 2 3) [1 2 3]: " services_input
+  read -r -p "Services à déployer (ex: 1 2 3 4) [1 2 3]: " services_input
   services_input="${services_input:-1 2 3}"
   services_input="$(echo "$services_input" | tr ',' ' ')"
 
   DEPLOY_APACHE=0
   DEPLOY_GLPI=0
   DEPLOY_UPTIME=0
+  DEPLOY_WSERV=0
   for s in $services_input; do
     [[ "$s" == "1" ]] && DEPLOY_APACHE=1
     [[ "$s" == "2" ]] && DEPLOY_GLPI=1
     [[ "$s" == "3" ]] && DEPLOY_UPTIME=1
+    [[ "$s" == "4" ]] && DEPLOY_WSERV=1
   done
 
-  if [[ "$DEPLOY_APACHE" == "0" && "$DEPLOY_GLPI" == "0" && "$DEPLOY_UPTIME" == "0" ]]; then
+  if [[ "$DEPLOY_APACHE" == "0" && "$DEPLOY_GLPI" == "0" && "$DEPLOY_UPTIME" == "0" && "$DEPLOY_WSERV" == "0" ]]; then
     log_warn "Aucun service sélectionné, Apache activé par défaut."
     DEPLOY_APACHE=1
   fi
@@ -305,6 +316,16 @@ prompt_deployment_plan_if_interactive() {
       prompt_with_default UPTIME_CORES "CPU Uptime" "$UPTIME_CORES"
       prompt_with_default UPTIME_MEMORY "RAM Uptime (MB)" "$UPTIME_MEMORY"
       prompt_with_default UPTIME_DISK "Disque Uptime" "$UPTIME_DISK"
+    fi
+    if [[ "$DEPLOY_WSERV" == "1" ]]; then
+      log_info "Configuration Windows Server"
+      prompt_with_default WSERV_NAME "Nom VM Windows" "$WSERV_NAME"
+      prompt_with_default WSERV_VM_ID "VMID Windows" "$WSERV_VM_ID"
+      prompt_with_default WSERV_CORES "CPU Windows" "$WSERV_CORES"
+      prompt_with_default WSERV_MEMORY "RAM Windows (MB)" "$WSERV_MEMORY"
+      prompt_with_default WSERV_DISK "Disque Windows" "$WSERV_DISK"
+      prompt_with_default WSERV_ADMIN_USER "Utilisateur WinRM" "$WSERV_ADMIN_USER"
+      prompt_with_default WSERV_ADMIN_PASSWORD "Mot de passe WinRM" "$WSERV_ADMIN_PASSWORD"
     fi
   fi
 }
@@ -395,6 +416,24 @@ EOF
 
   cat >> terraform/terraform.tfvars <<EOF
 }
+
+windows_vms = {
+EOF
+
+  if [[ "$DEPLOY_WSERV" == "1" ]]; then
+    cat >> terraform/terraform.tfvars <<EOF
+  "$WSERV_NAME" = {
+    vm_id     = $WSERV_VM_ID
+    cores     = $WSERV_CORES
+    memory    = $WSERV_MEMORY
+    disk_size = "$WSERV_DISK"
+    playbook  = "install_wserv.yml"
+  }
+EOF
+  fi
+
+  cat >> terraform/terraform.tfvars <<EOF
+}
 EOF
 }
 
@@ -428,11 +467,12 @@ run_terraform() {
 print_service_urls() {
   echo ""
   echo -e "${BOLD}${CYAN}=== Récapitulatif d'accès ===${NC}"
-  local ip_web ip_glpi ip_uptime
+  local ip_web ip_glpi ip_uptime ip_wserv
   pushd terraform >/dev/null
   ip_web="$(resolve_container_ip "$WEB_NAME")"
   ip_glpi="$(resolve_container_ip "$GLPI_NAME")"
   ip_uptime="$(resolve_container_ip "$UPTIME_NAME")"
+  ip_wserv="$(terraform state show "proxmox_virtual_environment_vm.windows[\"$WSERV_NAME\"]" 2>/dev/null | grep -E 'ipv4_addresses|ipv4' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '^127\.' | head -n 1 || true)"
   popd >/dev/null
 
   if [[ "$DEPLOY_APACHE" == "1" ]]; then
@@ -466,7 +506,42 @@ print_service_urls() {
     [[ -n "$ip_uptime" ]] && echo "  URL       : http://${ip_uptime}:3001"
     echo "  Login     : création au premier accès"
   fi
+
+  if [[ "$DEPLOY_WSERV" == "1" ]]; then
+    echo ""
+    echo -e "${BOLD}Windows Server${NC}"
+    echo "  VM        : ${VM_PREFIX}-${WSERV_NAME}"
+    echo "  IP        : ${ip_wserv:-non trouvée}"
+    echo "  Port HTTP : 80"
+    echo "  Port WinRM: 5985"
+    [[ -n "$ip_wserv" ]] && echo "  URL       : http://${ip_wserv}"
+    echo "  Login     : ${WSERV_ADMIN_USER} / ${WSERV_ADMIN_PASSWORD}"
+  fi
   echo ""
+}
+
+provision_windows_after_apply() {
+  if [[ "$DEPLOY_WSERV" != "1" ]]; then
+    return 0
+  fi
+
+  local wip=""
+  pushd terraform >/dev/null
+  wip="$(terraform state show "proxmox_virtual_environment_vm.windows[\"$WSERV_NAME\"]" 2>/dev/null | grep -E 'ipv4_addresses|ipv4' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '^127\.' | head -n 1 || true)"
+  popd >/dev/null
+
+  if [[ -z "$wip" ]]; then
+    log_warn "IP Windows non trouvée, provisioning Windows ignoré."
+    return 0
+  fi
+
+  log_title "Provisionnement Windows"
+  if [[ -x "./scripts/provision_windows.sh" ]]; then
+    ./scripts/provision_windows.sh "${VM_PREFIX}-${WSERV_NAME}" "$wip" "./ansible/playbooks/install_wserv.yml" "$WSERV_ADMIN_USER" "$WSERV_ADMIN_PASSWORD" || \
+      log_warn "Provisioning Windows échoué (WinRM indisponible ou credentials invalides)."
+  else
+    log_warn "scripts/provision_windows.sh introuvable/exécutable."
+  fi
 }
 
 main() {
@@ -529,6 +604,7 @@ main() {
   fi
 
   if run_terraform; then
+    provision_windows_after_apply
     log_ok "Deployment complete."
     print_service_urls
   else

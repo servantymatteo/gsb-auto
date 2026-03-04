@@ -37,7 +37,7 @@ echo ""
 cd terraform
 
 # Récupérer la liste des ressources
-RESOURCES=$(terraform state list 2>/dev/null | grep "proxmox_virtual_environment_container.container")
+RESOURCES=$(terraform state list 2>/dev/null | grep -E "proxmox_virtual_environment_container.container|proxmox_virtual_environment_vm.windows")
 
 if [ -z "$RESOURCES" ]; then
     echo -e "${YELLOW}⚠️  Aucun container trouvé${NC}"

@@ -70,6 +70,7 @@ Variables utiles (optionnelles) :
 - `VM_PREFIX` (défaut: `GSB`)
 - `TARGET_NODE` (défaut: hostname courant)
 - `DEPLOY_APACHE=0|1`, `DEPLOY_GLPI=0|1`, `DEPLOY_UPTIME=0|1`
+- `DEPLOY_WSERV=0|1` (déploie une VM Windows Server depuis template)
 - `PROXMOX_TOKEN_ID` / `PROXMOX_TOKEN_SECRET` (si tu ne veux pas l’auto-création)
 
 ### Option : Créer une VM runner Terraform
@@ -141,6 +142,11 @@ terraform apply --auto-approve
 - **GLPI** : Système de gestion de parc informatique et helpdesk
   - Playbook : `ansible/playbooks/install_glpi.yml`
   - Ressources recommandées : 2 CPU, 4096 MB RAM, 20G disque
+
+- **wSERV (Windows Server)** : VM Windows clonée depuis template Proxmox + provisioning WinRM
+  - Playbook : `ansible/playbooks/install_wserv.yml`
+  - Ressources recommandées : 4 CPU, 6144 MB RAM, 40G disque
+  - Prérequis : template Windows prêt (par défaut VMID `2000`) avec WinRM activé
 
 ## Ajouter un nouveau service
 

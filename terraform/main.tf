@@ -58,3 +58,47 @@ resource "proxmox_virtual_environment_container" "container" {
     command = "../scripts/provision.sh \"${var.vm_name}-${each.key}\" \"${self.ipv4["veth0"]}\" \"../ansible/playbooks/${each.value.playbook}\""
   }
 }
+
+resource "proxmox_virtual_environment_vm" "windows" {
+  for_each = var.windows_vms
+
+  name      = "${var.vm_name}-${each.key}"
+  node_name = var.target_node
+  vm_id     = each.value.vm_id
+  tags      = [lower(var.vm_name), lower(each.key)]
+
+  clone {
+    vm_id = var.windows_template_vmid
+    full  = true
+  }
+
+  cpu {
+    cores = each.value.cores
+  }
+
+  memory {
+    dedicated = each.value.memory
+  }
+
+  disk {
+    interface    = "scsi0"
+    datastore_id = var.vm_storage
+    size         = tonumber(replace(each.value.disk_size, "G", ""))
+  }
+
+  network_device {
+    bridge = var.vm_network_bridge
+    model  = "virtio"
+  }
+
+  agent {
+    enabled = true
+    timeout = "5m"
+  }
+
+  startup {
+    order = "2"
+  }
+
+  started = true
+}

@@ -1,0 +1,29 @@
+---
+- name: Installer et configurer Windows Server (IIS)
+  hosts: all
+  gather_facts: no
+
+  tasks:
+    - name: Installer IIS
+      ansible.windows.win_feature:
+        name: Web-Server
+        include_management_tools: true
+        state: present
+
+    - name: Créer une page d'accueil personnalisée
+      ansible.windows.win_copy:
+        dest: C:\inetpub\wwwroot\index.html
+        content: |
+          <!DOCTYPE html>
+          <html>
+          <head><title>Windows Server - GSB</title></head>
+          <body>
+            <h1>Windows Server déployé automatiquement</h1>
+            <p>Provisionné avec Terraform + Ansible</p>
+          </body>
+          </html>
+
+    - name: Redémarrer IIS
+      ansible.windows.win_service:
+        name: W3SVC
+        state: restarted

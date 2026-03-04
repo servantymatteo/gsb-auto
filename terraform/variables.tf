@@ -65,6 +65,24 @@ variable "vms" {
   }
 }
 
+variable "windows_vms" {
+  description = "Map des VMs Windows à créer"
+  type = map(object({
+    vm_id     = number
+    cores     = number
+    memory    = number
+    disk_size = string
+    playbook  = string
+  }))
+  default = {}
+}
+
+variable "windows_template_vmid" {
+  description = "VMID du template Windows à cloner"
+  type        = number
+  default     = 2000
+}
+
 variable "target_node" {
   description = "Nom du nœud Proxmox cible"
   type        = string
