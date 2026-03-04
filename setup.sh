@@ -74,7 +74,6 @@ WINDOWS_TEMPLATE_VMID="${WINDOWS_TEMPLATE_VMID:-2000}"
 WINDOWS_DOMAIN_NAME="${WINDOWS_DOMAIN_NAME:-gsb.local}"
 WINDOWS_DOMAIN_NETBIOS="${WINDOWS_DOMAIN_NETBIOS:-GSB}"
 WINDOWS_SAFE_MODE_PASSWORD="${WINDOWS_SAFE_MODE_PASSWORD:-Formation13@}"
-WINDOWS_SNIPPETS_DATASTORE="${WINDOWS_SNIPPETS_DATASTORE:-local}"
 
 SSH_PUB_KEY=""
 PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
@@ -339,7 +338,6 @@ prompt_deployment_plan_if_interactive() {
       prompt_with_default WINDOWS_DOMAIN_NAME "Nom domaine AD (DNS)" "$WINDOWS_DOMAIN_NAME"
       prompt_with_default WINDOWS_DOMAIN_NETBIOS "Nom domaine AD (NetBIOS)" "$WINDOWS_DOMAIN_NETBIOS"
       prompt_with_default WINDOWS_SAFE_MODE_PASSWORD "Mot de passe DSRM AD" "$WINDOWS_SAFE_MODE_PASSWORD"
-      prompt_with_default WINDOWS_SNIPPETS_DATASTORE "Datastore snippets cloud-init" "$WINDOWS_SNIPPETS_DATASTORE"
     fi
   fi
 }
@@ -455,7 +453,6 @@ windows_admin_password = "$WSERV_ADMIN_PASSWORD"
 windows_domain_name = "$WINDOWS_DOMAIN_NAME"
 windows_domain_netbios = "$WINDOWS_DOMAIN_NETBIOS"
 windows_safe_mode_password = "$WINDOWS_SAFE_MODE_PASSWORD"
-windows_snippets_datastore = "$WINDOWS_SNIPPETS_DATASTORE"
 EOF
 }
 
@@ -569,7 +566,7 @@ provision_windows_after_apply() {
 
   log_title "Provisionnement Windows"
   if [[ -x "./scripts/provision_windows.sh" ]]; then
-    ./scripts/provision_windows.sh "${VM_PREFIX}-${WSERV_NAME}" "$wip" "./ansible/playbooks/install_wserv.yml" "$WSERV_ADMIN_USER" "$WSERV_ADMIN_PASSWORD" || \
+    ./scripts/provision_windows.sh "${VM_PREFIX}-${WSERV_NAME}" "$wip" "./ansible/playbooks/install_wserv.yml" "$WSERV_ADMIN_USER" "$WSERV_ADMIN_PASSWORD" "$WINDOWS_DOMAIN_NAME" "$WINDOWS_DOMAIN_NETBIOS" "$WINDOWS_SAFE_MODE_PASSWORD" || \
       log_warn "Provisioning Windows échoué (WinRM indisponible ou credentials invalides)."
   else
     log_warn "scripts/provision_windows.sh introuvable/exécutable."
@@ -590,7 +587,7 @@ main() {
   prompt_deployment_plan_if_interactive
   if [[ "$DEPLOY_WSERV" == "1" ]]; then
     PROXMOX_AUTH_PREFERENCE="password"
-    log_info "wSERV sélectionné: auth Proxmox forcée en mode mot de passe (cloud-init snippets)."
+    log_info "wSERV sélectionné: auth Proxmox forcée en mode mot de passe."
   fi
 
   log_title "Validation Auth Proxmox"

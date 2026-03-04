@@ -85,8 +85,6 @@ resource "proxmox_virtual_environment_vm" "windows" {
       username = var.windows_admin_user
       password = var.windows_admin_password
     }
-
-    user_data_file_id = proxmox_virtual_environment_file.windows_cloudinit[each.key].id
   }
 
   cpu {
@@ -119,51 +117,4 @@ resource "proxmox_virtual_environment_vm" "windows" {
 
   started = true
   on_boot = true
-}
-
-resource "proxmox_virtual_environment_file" "windows_cloudinit" {
-  for_each = var.windows_vms
-
-  content_type = "snippets"
-  datastore_id = var.windows_snippets_datastore
-  node_name    = var.target_node
-
-  source_raw {
-    file_name = "cloudinit-${var.vm_name}-${each.key}.ps1"
-    data = <<-EOT
-      #ps1_sysnative
-      $ErrorActionPreference = "Stop"
-
-      $DomainName = "${var.windows_domain_name}"
-      $Netbios = "${var.windows_domain_netbios}"
-      $SafeModePwd = ConvertTo-SecureString "${var.windows_safe_mode_password}" -AsPlainText -Force
-
-      # Active WinRM + firewall pour Ansible/WinRM
-      winrm quickconfig -q
-      Set-Item -Path WSMan:\\localhost\\Service\\AllowUnencrypted -Value $true
-      Set-Item -Path WSMan:\\localhost\\Service\\Auth\\Basic -Value $true
-      netsh advfirewall firewall add rule name="WinRM 5985" dir=in action=allow protocol=TCP localport=5985
-
-      # Installe AD DS + DNS puis promeut en DC s'il n'est pas déjà configuré
-      Install-WindowsFeature AD-Domain-Services,DNS -IncludeManagementTools
-
-      $adReady = $false
-      try {
-        Get-ADDomain | Out-Null
-        $adReady = $true
-      } catch {
-        $adReady = $false
-      }
-
-      if (-not $adReady) {
-        Install-ADDSForest `
-          -DomainName $DomainName `
-          -DomainNetbiosName $Netbios `
-          -InstallDns `
-          -SafeModeAdministratorPassword $SafeModePwd `
-          -Force `
-          -NoRebootOnCompletion:$false
-      }
-    EOT
-  }
 }

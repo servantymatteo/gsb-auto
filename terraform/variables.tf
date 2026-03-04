@@ -115,12 +115,6 @@ variable "windows_safe_mode_password" {
   default     = "Formation13@"
 }
 
-variable "windows_snippets_datastore" {
-  description = "Datastore Proxmox supportant 'snippets' (souvent local)"
-  type        = string
-  default     = "local"
-}
-
 variable "target_node" {
   description = "Nom du nœud Proxmox cible"
   type        = string

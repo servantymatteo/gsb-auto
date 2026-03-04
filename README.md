@@ -146,8 +146,8 @@ terraform apply --auto-approve
 - **wSERV (Windows Server)** : VM Windows clonée depuis template Proxmox + provisioning WinRM
   - Playbook : `ansible/playbooks/install_wserv.yml`
   - Ressources recommandées : 4 CPU, 6144 MB RAM, 40G disque
-  - Prérequis : template Windows prêt (VMID demandé dans `setup.sh`) avec cloudbase-init + WinRM
-  - Le domaine AD DS est configuré automatiquement via cloud-init (user-data PowerShell)
+  - Prérequis : template Windows prêt (VMID demandé dans `setup.sh`) avec WinRM activé
+  - Le domaine AD DS est configuré automatiquement via Ansible/WinRM
 
 ## Ajouter un nouveau service
 

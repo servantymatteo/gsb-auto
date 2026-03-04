@@ -1,16 +1,29 @@
 ---
-- name: Installer et configurer Windows Server (IIS)
+- name: Configurer Windows Server (WinRM + IIS + AD DS)
   hosts: all
   gather_facts: no
 
+  vars:
+    ad_domain_name: "{{ ad_domain_name | default('gsb.local') }}"
+    ad_domain_netbios: "{{ ad_domain_netbios | default('GSB') }}"
+    ad_safe_mode_password: "{{ ad_safe_mode_password | default('Formation13@') }}"
+
   tasks:
+    - name: Activer WinRM (idempotent)
+      ansible.windows.win_powershell:
+        script: |
+          winrm quickconfig -q
+          Set-Item -Path WSMan:\localhost\Service\AllowUnencrypted -Value $true
+          Set-Item -Path WSMan:\localhost\Service\Auth\Basic -Value $true
+          netsh advfirewall firewall add rule name="WinRM 5985" dir=in action=allow protocol=TCP localport=5985 | Out-Null
+
     - name: Installer IIS
       ansible.windows.win_feature:
         name: Web-Server
         include_management_tools: true
         state: present
 
-    - name: Créer une page d'accueil personnalisée
+    - name: Déployer page d'accueil IIS
       ansible.windows.win_copy:
         dest: C:\inetpub\wwwroot\index.html
         content: |
@@ -19,11 +32,55 @@
           <head><title>Windows Server - GSB</title></head>
           <body>
             <h1>Windows Server déployé automatiquement</h1>
+            <p>Domaine AD: {{ ad_domain_name }} ({{ ad_domain_netbios }})</p>
             <p>Provisionné avec Terraform + Ansible</p>
           </body>
           </html>
 
-    - name: Redémarrer IIS
+    - name: Installer AD DS + DNS
+      ansible.windows.win_feature:
+        name:
+          - AD-Domain-Services
+          - DNS
+        include_management_tools: true
+        state: present
+      register: ad_features
+
+    - name: Promouvoir en contrôleur de domaine si nécessaire
+      ansible.windows.win_powershell:
+        script: |
+          $domain = "{{ ad_domain_name }}"
+          $netbios = "{{ ad_domain_netbios }}"
+          $pwd = ConvertTo-SecureString "{{ ad_safe_mode_password }}" -AsPlainText -Force
+          try {
+            Get-ADDomain -Identity $domain | Out-Null
+            Write-Output "ALREADY_DOMAIN"
+          } catch {
+            Install-ADDSForest `
+              -DomainName $domain `
+              -DomainNetbiosName $netbios `
+              -InstallDNS `
+              -SafeModeAdministratorPassword $pwd `
+              -Force `
+              -NoRebootOnCompletion:$true
+            Write-Output "PROMOTED"
+          }
+      register: ad_promote
+
+    - name: Reboot après promotion AD
+      ansible.windows.win_reboot:
+        reboot_timeout: 3600
+        post_reboot_delay: 60
+      when: ad_promote.stdout is search("PROMOTED")
+
+    - name: Vérifier service IIS
       ansible.windows.win_service:
         name: W3SVC
-        state: restarted
+        state: started
+
+    - name: Résumé final Windows
+      ansible.builtin.debug:
+        msg:
+          - "Windows Server configuré"
+          - "IIS: OK"
+          - "AD DS: {{ ad_domain_name }} ({{ ad_domain_netbios }})"
