@@ -101,4 +101,5 @@ resource "proxmox_virtual_environment_vm" "windows" {
   }
 
   started = true
+  on_boot = true
 }

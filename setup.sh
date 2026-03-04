@@ -529,6 +529,14 @@ provision_windows_after_apply() {
     return 0
   fi
 
+  if [[ $EUID -eq 0 ]] && command -v qm >/dev/null 2>&1; then
+    if qm status "$WSERV_VM_ID" 2>/dev/null | grep -q "stopped"; then
+      log_warn "VM Windows ${WSERV_VM_ID} arrêtée après apply, démarrage forcé..."
+      qm start "$WSERV_VM_ID" || true
+      sleep 5
+    fi
+  fi
+
   local wip=""
   pushd terraform >/dev/null
   wip="$(terraform state show "proxmox_virtual_environment_vm.windows[\"$WSERV_NAME\"]" 2>/dev/null | grep -E 'ipv4_addresses|ipv4' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '^127\.' | head -n 1 || true)"
