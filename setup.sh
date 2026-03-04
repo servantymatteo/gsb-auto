@@ -72,6 +72,34 @@ prompt_required() {
   done
 }
 
+generate_proxmox_token_secret() {
+  local token_id="$1"
+  local user_part token_name generated_name out generated_secret
+
+  if [[ $EUID -ne 0 ]] || ! command -v pveum >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if [[ "$token_id" != *"!"* ]]; then
+    return 1
+  fi
+
+  user_part="${token_id%%!*}"
+  token_name="${token_id#*!}"
+  generated_name="${token_name}-$(date +%s)"
+
+  out=$(pveum user token add "$user_part" "$generated_name" --privsep 0 2>/dev/null || true)
+  generated_secret=$(echo "$out" | awk '/value/ {print $2; exit}')
+
+  if [[ -n "$generated_secret" ]]; then
+    PROXMOX_TOKEN_ID="${user_part}!${generated_name}"
+    PROXMOX_TOKEN_SECRET="$generated_secret"
+    return 0
+  fi
+
+  return 1
+}
+
 detect_or_create_ssh_key() {
   local project_key="ssh/id_ed25519_terraform.pub"
   local user_key_ed25519="$HOME/.ssh/id_ed25519.pub"
@@ -148,7 +176,11 @@ if is_placeholder "$PROXMOX_TOKEN_ID"; then
 fi
 
 if is_placeholder "$PROXMOX_TOKEN_SECRET"; then
-  prompt_required "PROXMOX_TOKEN_SECRET" "Token secret Proxmox" "" "true"
+  if generate_proxmox_token_secret "$PROXMOX_TOKEN_ID"; then
+    echo -e "${GREEN}${CHECK} Token Proxmox généré automatiquement: ${PROXMOX_TOKEN_ID}${NC}"
+  else
+    prompt_required "PROXMOX_TOKEN_SECRET" "Token secret Proxmox" "" "true"
+  fi
 fi
 
 if is_placeholder "$SSH_KEYS"; then
