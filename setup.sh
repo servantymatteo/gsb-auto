@@ -262,6 +262,10 @@ EOF
 }
 
 run_terraform() {
+  # Empêche les variables d'environnement Proxmox de surcharger le mode d'auth choisi.
+  unset PM_API_TOKEN_ID PM_API_TOKEN_SECRET PM_USER PM_PASS PM_PASSWORD
+  unset PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET
+
   pushd terraform >/dev/null
   log_title "Terraform Init"
   TF_IN_AUTOMATION=1 terraform init -input=false -compact-warnings
@@ -344,6 +348,11 @@ main() {
   log_title "Génération Config"
   write_env_file
   write_tfvars
+  if [[ "$AUTH_MODE_SELECTED" == "password" ]]; then
+    log_info "Auth Terraform: password (${PROXMOX_USER})"
+  else
+    log_info "Auth Terraform: token (${PROXMOX_TOKEN_ID})"
+  fi
 
   if run_terraform; then
     log_ok "Deployment complete."
