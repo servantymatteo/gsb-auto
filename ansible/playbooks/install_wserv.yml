@@ -7,6 +7,10 @@
     ad_domain_name: "{{ ad_domain_name | default('gsb.local') }}"
     ad_domain_netbios: "{{ ad_domain_netbios | default('GSB') }}"
     ad_safe_mode_password: "{{ ad_safe_mode_password | default('Formation13@') }}"
+    ad_ou_list: "{{ ad_ou_list | default('') }}"
+    ad_group_list: "{{ ad_group_list | default('') }}"
+    ad_user_list: "{{ ad_user_list | default('') }}"
+    ad_default_user_password: "{{ ad_default_user_password | default('Formation13@') }}"
 
   tasks:
     - name: Activer WinRM (idempotent)
@@ -81,9 +85,65 @@
         name: W3SVC
         state: started
 
+    - name: Créer OU, groupes et utilisateurs AD (optionnel)
+      ansible.windows.win_powershell:
+        script: |
+          Import-Module ActiveDirectory
+
+          $domain = "{{ ad_domain_name }}"
+          $ouCsv = "{{ ad_ou_list }}"
+          $groupCsv = "{{ ad_group_list }}"
+          $userCsv = "{{ ad_user_list }}"
+          $userPwd = "{{ ad_default_user_password }}"
+          $usersContainer = "CN=Users"
+
+          $dn = ($domain.Split('.') | ForEach-Object { "DC=$_" }) -join ','
+          $securePassword = ConvertTo-SecureString $userPwd -AsPlainText -Force
+
+          function Parse-CsvList {
+            param([string]$Raw)
+            if ([string]::IsNullOrWhiteSpace($Raw)) { return @() }
+            return $Raw.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
+          }
+
+          $ous = Parse-CsvList -Raw $ouCsv
+          $groups = Parse-CsvList -Raw $groupCsv
+          $users = Parse-CsvList -Raw $userCsv
+
+          foreach ($ou in $ous) {
+            $ouDn = "OU=$ou,$dn"
+            if (-not (Get-ADOrganizationalUnit -Identity $ouDn -ErrorAction SilentlyContinue)) {
+              New-ADOrganizationalUnit -Name $ou -Path $dn -ProtectedFromAccidentalDeletion:$false | Out-Null
+            }
+          }
+
+          foreach ($grp in $groups) {
+            $grpDn = "CN=$grp,$usersContainer,$dn"
+            if (-not (Get-ADGroup -Identity $grpDn -ErrorAction SilentlyContinue)) {
+              New-ADGroup -Name $grp -SamAccountName $grp -GroupScope Global -GroupCategory Security -Path "$usersContainer,$dn" | Out-Null
+            }
+          }
+
+          foreach ($usr in $users) {
+            $usrDn = "CN=$usr,$usersContainer,$dn"
+            if (-not (Get-ADUser -Identity $usrDn -ErrorAction SilentlyContinue)) {
+              New-ADUser `
+                -Name $usr `
+                -SamAccountName $usr `
+                -UserPrincipalName "$usr@$domain" `
+                -Path "$usersContainer,$dn" `
+                -AccountPassword $securePassword `
+                -Enabled $true `
+                -ChangePasswordAtLogon $false | Out-Null
+            }
+          }
+
     - name: Résumé final Windows
       ansible.builtin.debug:
         msg:
           - "Windows Server configuré"
           - "IIS: OK"
           - "AD DS: {{ ad_domain_name }} ({{ ad_domain_netbios }})"
+          - "OU créées: {{ ad_ou_list | default('aucune') }}"
+          - "Groupes créés: {{ ad_group_list | default('aucun') }}"
+          - "Users créés: {{ ad_user_list | default('aucun') }}"

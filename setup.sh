@@ -70,6 +70,10 @@ WINDOWS_DOMAIN_NAME="${WINDOWS_DOMAIN_NAME:-gsb.local}"
 WINDOWS_DOMAIN_NETBIOS="${WINDOWS_DOMAIN_NETBIOS:-GSB}"
 WINDOWS_SAFE_MODE_PASSWORD="${WINDOWS_SAFE_MODE_PASSWORD:-Formation13@}"
 WINDOWS_ENABLE_AGENT="${WINDOWS_ENABLE_AGENT:-1}"
+AD_OU_LIST="${AD_OU_LIST:-}"
+AD_GROUP_LIST="${AD_GROUP_LIST:-}"
+AD_USER_LIST="${AD_USER_LIST:-}"
+AD_DEFAULT_USER_PASSWORD="${AD_DEFAULT_USER_PASSWORD:-Formation13@}"
 WSERV_IP="${WSERV_IP:-}"
 WINDOWS_IP_WAIT_SECONDS="${WINDOWS_IP_WAIT_SECONDS:-180}"
 WINDOWS_IP_RETRY_INTERVAL="${WINDOWS_IP_RETRY_INTERVAL:-5}"
@@ -353,6 +357,16 @@ prompt_deployment_plan_if_interactive() {
     log_info "Configuration Windows Server"
     prompt_with_default WINDOWS_TEMPLATE_VMID "VMID template Windows à cloner" "$WINDOWS_TEMPLATE_VMID"
     prompt_with_default WSERV_VM_ID "VMID cible de la VM Windows (nouvelle VM)" "$WSERV_VM_ID"
+    if [[ -t 0 ]]; then
+      local create_ad_objects="N"
+      read -r -p "Créer des OU/groupes/utilisateurs AD ? (o/N): " create_ad_objects
+      if [[ "$create_ad_objects" == "o" || "$create_ad_objects" == "O" ]]; then
+        prompt_with_default AD_OU_LIST "Liste OU (CSV, ex: IT,RH)" "$AD_OU_LIST"
+        prompt_with_default AD_GROUP_LIST "Liste groupes AD (CSV, ex: GSB-Admins,GSB-Users)" "$AD_GROUP_LIST"
+        prompt_with_default AD_USER_LIST "Liste users AD (CSV, ex: alice,bob,carol)" "$AD_USER_LIST"
+        prompt_with_default AD_DEFAULT_USER_PASSWORD "Mot de passe users AD" "$AD_DEFAULT_USER_PASSWORD"
+      fi
+    fi
   fi
 
   if [[ "$use_defaults" == "n" || "$use_defaults" == "N" ]]; then
@@ -637,7 +651,7 @@ provision_windows_after_apply() {
 
   log_title "Provisionnement Windows"
   if [[ -x "./scripts/provision_windows.sh" ]]; then
-    ./scripts/provision_windows.sh "${VM_PREFIX}-${WSERV_NAME}" "$wip" "./ansible/playbooks/install_wserv.yml" "$WSERV_ADMIN_USER" "$WSERV_ADMIN_PASSWORD" "$WINDOWS_DOMAIN_NAME" "$WINDOWS_DOMAIN_NETBIOS" "$WINDOWS_SAFE_MODE_PASSWORD" || \
+    ./scripts/provision_windows.sh "${VM_PREFIX}-${WSERV_NAME}" "$wip" "./ansible/playbooks/install_wserv.yml" "$WSERV_ADMIN_USER" "$WSERV_ADMIN_PASSWORD" "$WINDOWS_DOMAIN_NAME" "$WINDOWS_DOMAIN_NETBIOS" "$WINDOWS_SAFE_MODE_PASSWORD" "$AD_OU_LIST" "$AD_GROUP_LIST" "$AD_USER_LIST" "$AD_DEFAULT_USER_PASSWORD" || \
       log_warn "Provisioning Windows échoué (WinRM indisponible ou credentials invalides)."
   else
     log_warn "scripts/provision_windows.sh introuvable/exécutable."

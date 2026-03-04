@@ -17,6 +17,10 @@ WIN_PASSWORD="$5"
 AD_DOMAIN_NAME="${6:-gsb.local}"
 AD_DOMAIN_NETBIOS="${7:-GSB}"
 AD_SAFE_MODE_PASSWORD="${8:-Formation13@}"
+AD_OU_LIST="${9:-}"
+AD_GROUP_LIST="${10:-}"
+AD_USER_LIST="${11:-}"
+AD_DEFAULT_USER_PASSWORD="${12:-Formation13@}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -67,7 +71,11 @@ ANSIBLE_FORCE_COLOR=1 ANSIBLE_CONFIG="$ANSIBLE_CONFIG" ansible-playbook \
   -e "ansible_password=${WIN_PASSWORD}" \
   -e "ad_domain_name=${AD_DOMAIN_NAME}" \
   -e "ad_domain_netbios=${AD_DOMAIN_NETBIOS}" \
-  -e "ad_safe_mode_password=${AD_SAFE_MODE_PASSWORD}"
+  -e "ad_safe_mode_password=${AD_SAFE_MODE_PASSWORD}" \
+  -e "ad_ou_list=${AD_OU_LIST}" \
+  -e "ad_group_list=${AD_GROUP_LIST}" \
+  -e "ad_user_list=${AD_USER_LIST}" \
+  -e "ad_default_user_password=${AD_DEFAULT_USER_PASSWORD}"
 
 echo ""
 echo -e "${GREEN}[OK]${NC} Provisionnement Windows terminé (${VM_NAME})"
