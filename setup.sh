@@ -20,6 +20,7 @@ GEAR="⚙️"
 MAX_APPLY_ATTEMPTS=3
 AUTO_GENERATED_TOKEN=0
 AUTO_GENERATED_TOKEN_ID=""
+PROXMOX_TOKEN_ROLE="Administrator"
 
 START_TIME=$(date +%s)
 ENV_FILE=".env.local"
@@ -106,9 +107,9 @@ generate_proxmox_token_secret() {
     AUTO_GENERATED_TOKEN_ID="$full_token_id"
 
     # Applique explicitement les permissions token pour éviter les erreurs API (ex: VM.Monitor).
-    pveum aclmod / -token "$full_token_id" -role PVEAdmin >/dev/null 2>&1 || \
-    pveum aclmod / --tokens "$full_token_id" --roles PVEAdmin >/dev/null 2>&1 || \
-    pveum aclmod / -user "$user_part" -role PVEAdmin >/dev/null 2>&1 || true
+    pveum aclmod / -token "$full_token_id" -role "$PROXMOX_TOKEN_ROLE" >/dev/null 2>&1 || \
+    pveum aclmod / --tokens "$full_token_id" --roles "$PROXMOX_TOKEN_ROLE" >/dev/null 2>&1 || \
+    pveum aclmod / -user "$user_part" -role "$PROXMOX_TOKEN_ROLE" >/dev/null 2>&1 || true
 
     return 0
   fi
@@ -131,9 +132,9 @@ ensure_proxmox_token_acl() {
   user_part="${token_id%%!*}"
 
   # Couvre les variantes selon version Proxmox.
-  pveum aclmod / -token "$token_id" -role PVEAdmin >/dev/null 2>&1 || \
-  pveum aclmod / --tokens "$token_id" --roles PVEAdmin >/dev/null 2>&1 || \
-  pveum aclmod / -user "$user_part" -role PVEAdmin >/dev/null 2>&1 || true
+  pveum aclmod / -token "$token_id" -role "$PROXMOX_TOKEN_ROLE" >/dev/null 2>&1 || \
+  pveum aclmod / --tokens "$token_id" --roles "$PROXMOX_TOKEN_ROLE" >/dev/null 2>&1 || \
+  pveum aclmod / -user "$user_part" -role "$PROXMOX_TOKEN_ROLE" >/dev/null 2>&1 || true
 
   return 0
 }
@@ -297,7 +298,7 @@ fi
 
 # Si le script tourne en admin sur Proxmox, applique les ACL nécessaires même pour un token existant.
 if ensure_proxmox_token_acl "$PROXMOX_TOKEN_ID"; then
-  echo -e "${GREEN}${CHECK} Permissions token Proxmox vérifiées/appliquées (PVEAdmin)${NC}"
+  echo -e "${GREEN}${CHECK} Permissions token Proxmox vérifiées/appliquées (${PROXMOX_TOKEN_ROLE})${NC}"
 fi
 
 if ! proxmox_token_is_valid "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET"; then
