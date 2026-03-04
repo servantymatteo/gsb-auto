@@ -40,6 +40,19 @@ echo -e "${BLUE}[INFO]${NC} Login   : ${YELLOW}${WIN_USER}${NC}"
 echo -e "${BLUE}[INFO]${NC} Playbook: ${YELLOW}${PLAYBOOK}${NC}"
 echo ""
 
+echo -e "${BLUE}[INFO]${NC} Attente WinRM (port 5985)..."
+for i in {1..60}; do
+  if (echo > /dev/tcp/"$VM_IP"/5985) >/dev/null 2>&1; then
+    echo -e "${GREEN}[OK]${NC} WinRM est joignable"
+    break
+  fi
+  if [[ $i -eq 60 ]]; then
+    echo -e "${RED}[ERROR]${NC} WinRM indisponible sur ${VM_IP}:5985"
+    exit 1
+  fi
+  sleep 10
+done
+
 ANSIBLE_FORCE_COLOR=1 ANSIBLE_CONFIG="$ANSIBLE_CONFIG" ansible-playbook \
   -i "${VM_IP}," \
   "$PLAYBOOK" \

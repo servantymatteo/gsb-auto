@@ -83,6 +83,44 @@ variable "windows_template_vmid" {
   default     = 2000
 }
 
+variable "windows_admin_user" {
+  description = "Utilisateur admin local Windows (cloud-init)"
+  type        = string
+  default     = "Administrateur"
+}
+
+variable "windows_admin_password" {
+  description = "Mot de passe admin local Windows (cloud-init)"
+  type        = string
+  sensitive   = true
+  default     = "Formation13@"
+}
+
+variable "windows_domain_name" {
+  description = "Nom DNS du domaine AD à créer"
+  type        = string
+  default     = "gsb.local"
+}
+
+variable "windows_domain_netbios" {
+  description = "Nom NetBIOS du domaine AD"
+  type        = string
+  default     = "GSB"
+}
+
+variable "windows_safe_mode_password" {
+  description = "Mot de passe DSRM pour AD DS"
+  type        = string
+  sensitive   = true
+  default     = "Formation13@"
+}
+
+variable "windows_snippets_datastore" {
+  description = "Datastore Proxmox supportant 'snippets' (souvent local)"
+  type        = string
+  default     = "local"
+}
+
 variable "target_node" {
   description = "Nom du nœud Proxmox cible"
   type        = string

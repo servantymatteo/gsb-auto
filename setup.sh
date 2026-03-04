@@ -71,6 +71,10 @@ WSERV_DISK="${WSERV_DISK:-40G}"
 WSERV_ADMIN_USER="${WSERV_ADMIN_USER:-Administrateur}"
 WSERV_ADMIN_PASSWORD="${WSERV_ADMIN_PASSWORD:-Formation13@}"
 WINDOWS_TEMPLATE_VMID="${WINDOWS_TEMPLATE_VMID:-2000}"
+WINDOWS_DOMAIN_NAME="${WINDOWS_DOMAIN_NAME:-gsb.local}"
+WINDOWS_DOMAIN_NETBIOS="${WINDOWS_DOMAIN_NETBIOS:-GSB}"
+WINDOWS_SAFE_MODE_PASSWORD="${WINDOWS_SAFE_MODE_PASSWORD:-Formation13@}"
+WINDOWS_SNIPPETS_DATASTORE="${WINDOWS_SNIPPETS_DATASTORE:-local}"
 
 SSH_PUB_KEY=""
 PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
@@ -296,6 +300,12 @@ prompt_deployment_plan_if_interactive() {
   local use_defaults="O"
   read -r -p "Utiliser les ressources recommandées ? (O/n): " use_defaults
   use_defaults="${use_defaults:-O}"
+
+  if [[ "$DEPLOY_WSERV" == "1" ]]; then
+    log_info "Configuration Windows Server"
+    prompt_with_default WINDOWS_TEMPLATE_VMID "VMID template Windows à cloner" "$WINDOWS_TEMPLATE_VMID"
+  fi
+
   if [[ "$use_defaults" == "n" || "$use_defaults" == "N" ]]; then
     if [[ "$DEPLOY_APACHE" == "1" ]]; then
       log_info "Configuration Apache"
@@ -319,8 +329,6 @@ prompt_deployment_plan_if_interactive() {
       prompt_with_default UPTIME_DISK "Disque Uptime" "$UPTIME_DISK"
     fi
     if [[ "$DEPLOY_WSERV" == "1" ]]; then
-      log_info "Configuration Windows Server"
-      prompt_with_default WINDOWS_TEMPLATE_VMID "VMID template Windows à cloner" "$WINDOWS_TEMPLATE_VMID"
       prompt_with_default WSERV_NAME "Nom VM Windows" "$WSERV_NAME"
       prompt_with_default WSERV_VM_ID "VMID Windows" "$WSERV_VM_ID"
       prompt_with_default WSERV_CORES "CPU Windows" "$WSERV_CORES"
@@ -328,6 +336,10 @@ prompt_deployment_plan_if_interactive() {
       prompt_with_default WSERV_DISK "Disque Windows" "$WSERV_DISK"
       prompt_with_default WSERV_ADMIN_USER "Utilisateur WinRM" "$WSERV_ADMIN_USER"
       prompt_with_default WSERV_ADMIN_PASSWORD "Mot de passe WinRM" "$WSERV_ADMIN_PASSWORD"
+      prompt_with_default WINDOWS_DOMAIN_NAME "Nom domaine AD (DNS)" "$WINDOWS_DOMAIN_NAME"
+      prompt_with_default WINDOWS_DOMAIN_NETBIOS "Nom domaine AD (NetBIOS)" "$WINDOWS_DOMAIN_NETBIOS"
+      prompt_with_default WINDOWS_SAFE_MODE_PASSWORD "Mot de passe DSRM AD" "$WINDOWS_SAFE_MODE_PASSWORD"
+      prompt_with_default WINDOWS_SNIPPETS_DATASTORE "Datastore snippets cloud-init" "$WINDOWS_SNIPPETS_DATASTORE"
     fi
   fi
 }
@@ -438,6 +450,12 @@ EOF
 }
 
 windows_template_vmid = $WINDOWS_TEMPLATE_VMID
+windows_admin_user = "$WSERV_ADMIN_USER"
+windows_admin_password = "$WSERV_ADMIN_PASSWORD"
+windows_domain_name = "$WINDOWS_DOMAIN_NAME"
+windows_domain_netbios = "$WINDOWS_DOMAIN_NETBIOS"
+windows_safe_mode_password = "$WINDOWS_SAFE_MODE_PASSWORD"
+windows_snippets_datastore = "$WINDOWS_SNIPPETS_DATASTORE"
 EOF
 }
 
@@ -518,6 +536,8 @@ print_service_urls() {
     echo "  IP        : ${ip_wserv:-non trouvée}"
     echo "  Port HTTP : 80"
     echo "  Port WinRM: 5985"
+    echo "  AD DNS    : ${WINDOWS_DOMAIN_NAME}"
+    echo "  AD NetBIOS: ${WINDOWS_DOMAIN_NETBIOS}"
     [[ -n "$ip_wserv" ]] && echo "  URL       : http://${ip_wserv}"
     echo "  Login     : ${WSERV_ADMIN_USER} / ${WSERV_ADMIN_PASSWORD}"
   fi
@@ -567,6 +587,12 @@ main() {
   SSH_PUB_KEY="$(detect_or_create_ssh_key)"
   log_ok "SSH public key ready."
 
+  prompt_deployment_plan_if_interactive
+  if [[ "$DEPLOY_WSERV" == "1" ]]; then
+    PROXMOX_AUTH_PREFERENCE="password"
+    log_info "wSERV sélectionné: auth Proxmox forcée en mode mot de passe (cloud-init snippets)."
+  fi
+
   log_title "Validation Auth Proxmox"
   if [[ "$PROXMOX_AUTH_PREFERENCE" == "token" ]]; then
     log_info "Authentification préférée: API token"
@@ -606,7 +632,6 @@ main() {
   fi
 
   log_title "Génération Config"
-  prompt_deployment_plan_if_interactive
   write_env_file
   write_tfvars
   if [[ "$AUTH_MODE_SELECTED" == "password" ]]; then
