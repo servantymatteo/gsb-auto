@@ -50,6 +50,18 @@ PROXMOX_AUTH_PREFERENCE="${PROXMOX_AUTH_PREFERENCE:-token}"
 DEPLOY_APACHE="${DEPLOY_APACHE:-1}"
 DEPLOY_GLPI="${DEPLOY_GLPI:-1}"
 DEPLOY_UPTIME="${DEPLOY_UPTIME:-1}"
+WEB_NAME="${WEB_NAME:-web}"
+WEB_CORES="${WEB_CORES:-2}"
+WEB_MEMORY="${WEB_MEMORY:-2048}"
+WEB_DISK="${WEB_DISK:-10G}"
+GLPI_NAME="${GLPI_NAME:-glpi}"
+GLPI_CORES="${GLPI_CORES:-2}"
+GLPI_MEMORY="${GLPI_MEMORY:-4096}"
+GLPI_DISK="${GLPI_DISK:-20G}"
+UPTIME_NAME="${UPTIME_NAME:-monitoring}"
+UPTIME_CORES="${UPTIME_CORES:-2}"
+UPTIME_MEMORY="${UPTIME_MEMORY:-2048}"
+UPTIME_DISK="${UPTIME_DISK:-15G}"
 
 SSH_PUB_KEY=""
 PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
@@ -166,6 +178,79 @@ cleanup() {
   fi
 }
 
+prompt_with_default() {
+  local __var="$1"
+  local __label="$2"
+  local __default="$3"
+  local __input=""
+  read -r -p "$__label [$__default]: " __input
+  if [[ -z "$__input" ]]; then
+    printf -v "$__var" '%s' "$__default"
+  else
+    printf -v "$__var" '%s' "$__input"
+  fi
+}
+
+prompt_deployment_plan_if_interactive() {
+  if [[ ! -t 0 ]]; then
+    return 0
+  fi
+
+  log_title "Plan de déploiement"
+  prompt_with_default VM_PREFIX "Préfixe des containers" "$VM_PREFIX"
+
+  echo -e "${CYAN}Services disponibles:${NC}"
+  echo "  [1] Apache"
+  echo "  [2] GLPI"
+  echo "  [3] Uptime Kuma"
+
+  local services_input=""
+  read -r -p "Services à déployer (ex: 1 2 3) [1 2 3]: " services_input
+  services_input="${services_input:-1 2 3}"
+  services_input="$(echo "$services_input" | tr ',' ' ')"
+
+  DEPLOY_APACHE=0
+  DEPLOY_GLPI=0
+  DEPLOY_UPTIME=0
+  for s in $services_input; do
+    [[ "$s" == "1" ]] && DEPLOY_APACHE=1
+    [[ "$s" == "2" ]] && DEPLOY_GLPI=1
+    [[ "$s" == "3" ]] && DEPLOY_UPTIME=1
+  done
+
+  if [[ "$DEPLOY_APACHE" == "0" && "$DEPLOY_GLPI" == "0" && "$DEPLOY_UPTIME" == "0" ]]; then
+    log_warn "Aucun service sélectionné, Apache activé par défaut."
+    DEPLOY_APACHE=1
+  fi
+
+  local use_defaults="O"
+  read -r -p "Utiliser les ressources recommandées ? (O/n): " use_defaults
+  use_defaults="${use_defaults:-O}"
+  if [[ "$use_defaults" == "n" || "$use_defaults" == "N" ]]; then
+    if [[ "$DEPLOY_APACHE" == "1" ]]; then
+      log_info "Configuration Apache"
+      prompt_with_default WEB_NAME "Nom container Apache" "$WEB_NAME"
+      prompt_with_default WEB_CORES "CPU Apache" "$WEB_CORES"
+      prompt_with_default WEB_MEMORY "RAM Apache (MB)" "$WEB_MEMORY"
+      prompt_with_default WEB_DISK "Disque Apache" "$WEB_DISK"
+    fi
+    if [[ "$DEPLOY_GLPI" == "1" ]]; then
+      log_info "Configuration GLPI"
+      prompt_with_default GLPI_NAME "Nom container GLPI" "$GLPI_NAME"
+      prompt_with_default GLPI_CORES "CPU GLPI" "$GLPI_CORES"
+      prompt_with_default GLPI_MEMORY "RAM GLPI (MB)" "$GLPI_MEMORY"
+      prompt_with_default GLPI_DISK "Disque GLPI" "$GLPI_DISK"
+    fi
+    if [[ "$DEPLOY_UPTIME" == "1" ]]; then
+      log_info "Configuration Uptime Kuma"
+      prompt_with_default UPTIME_NAME "Nom container Uptime" "$UPTIME_NAME"
+      prompt_with_default UPTIME_CORES "CPU Uptime" "$UPTIME_CORES"
+      prompt_with_default UPTIME_MEMORY "RAM Uptime (MB)" "$UPTIME_MEMORY"
+      prompt_with_default UPTIME_DISK "Disque Uptime" "$UPTIME_DISK"
+    fi
+  fi
+}
+
 write_env_file() {
   cat > .env.local <<EOF
 PROXMOX_API_URL=$PROXMOX_API_URL
@@ -219,10 +304,10 @@ EOF
 
   if [[ "$DEPLOY_APACHE" == "1" ]]; then
     cat >> terraform/terraform.tfvars <<EOF
-  "web" = {
-    cores     = 2
-    memory    = 2048
-    disk_size = "10G"
+  "$WEB_NAME" = {
+    cores     = $WEB_CORES
+    memory    = $WEB_MEMORY
+    disk_size = "$WEB_DISK"
     playbook  = "install_apache.yml"
   }
 EOF
@@ -230,10 +315,10 @@ EOF
 
   if [[ "$DEPLOY_GLPI" == "1" ]]; then
     cat >> terraform/terraform.tfvars <<EOF
-  "glpi" = {
-    cores     = 2
-    memory    = 4096
-    disk_size = "20G"
+  "$GLPI_NAME" = {
+    cores     = $GLPI_CORES
+    memory    = $GLPI_MEMORY
+    disk_size = "$GLPI_DISK"
     playbook  = "install_glpi.yml"
   }
 EOF
@@ -241,10 +326,10 @@ EOF
 
   if [[ "$DEPLOY_UPTIME" == "1" ]]; then
     cat >> terraform/terraform.tfvars <<EOF
-  "monitoring" = {
-    cores     = 2
-    memory    = 2048
-    disk_size = "15G"
+  "$UPTIME_NAME" = {
+    cores     = $UPTIME_CORES
+    memory    = $UPTIME_MEMORY
+    disk_size = "$UPTIME_DISK"
     playbook  = "install_uptime_kuma.yml"
   }
 EOF
@@ -347,6 +432,7 @@ main() {
   fi
 
   log_title "Génération Config"
+  prompt_deployment_plan_if_interactive
   write_env_file
   write_tfvars
   if [[ "$AUTH_MODE_SELECTED" == "password" ]]; then
