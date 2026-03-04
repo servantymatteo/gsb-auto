@@ -19,6 +19,18 @@ log_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_err()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
+prompt_password_if_missing() {
+  if [[ -z "${PROXMOX_PASSWORD:-}" || "${PROXMOX_PASSWORD}" == "ton_mdp" ]]; then
+    if [[ -t 0 ]]; then
+      read -r -s -p "Mot de passe Proxmox pour ${PROXMOX_USER}: " PROXMOX_PASSWORD
+      echo ""
+    else
+      log_err "Mot de passe Proxmox manquant. Lance en interactif ou exporte PROXMOX_PASSWORD."
+      exit 1
+    fi
+  fi
+}
+
 MAX_APPLY_ATTEMPTS="${MAX_APPLY_ATTEMPTS:-3}"
 CLEANUP_AT_END="${CLEANUP_AT_END:-1}"
 VM_PREFIX="${VM_PREFIX:-GSB}"
@@ -296,10 +308,7 @@ main() {
     log_warn "Token missing required provider permissions (including VM.Monitor). Switching to password auth."
     PROXMOX_TOKEN_ID=""
     PROXMOX_TOKEN_SECRET=""
-    if [[ -z "$PROXMOX_PASSWORD" && -t 0 ]]; then
-      read -r -s -p "Proxmox password for ${PROXMOX_USER}: " PROXMOX_PASSWORD
-      echo ""
-    fi
+    prompt_password_if_missing
     if [[ -z "$PROXMOX_PASSWORD" ]] || ! password_has_provider_level_access || ! password_has_vm_monitor_access; then
       log_err "Password fallback failed (provider or VM.Monitor access missing). Set PROXMOX_PASSWORD and retry."
       exit 1
