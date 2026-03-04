@@ -15,8 +15,9 @@ CI_USER="${CI_USER:-root}"
 CI_PASSWORD="${CI_PASSWORD:-Formation13@}"
 TOKEN_USER="${TOKEN_USER:-terraform-prov@pve}"
 TOKEN_NAME="${TOKEN_NAME:-auto-token}"
-USER_ROLE="${USER_ROLE:-TerraformProv}"
 PROXMOX_TOKEN_PRIVSEP="${PROXMOX_TOKEN_PRIVSEP:-0}"
+PROXMOX_USER="${PROXMOX_USER:-root@pam}"
+PROXMOX_PASSWORD="${PROXMOX_PASSWORD:-}"
 
 DEPLOY_APACHE="${DEPLOY_APACHE:-1}"
 DEPLOY_GLPI="${DEPLOY_GLPI:-1}"
@@ -58,29 +59,49 @@ setup_token_when_possible() {
     return 1
   fi
 
-  if ! pveum role list | awk '{print $1}' | grep -qx "$USER_ROLE"; then
-    pveum role add "$USER_ROLE" -privs "Datastore.AllocateSpace Datastore.AllocateTemplate Datastore.Audit Pool.Allocate Sys.Audit Sys.Console Sys.Modify VM.Allocate VM.Audit VM.Clone VM.Config.CDROM VM.Config.Cloudinit VM.Config.CPU VM.Config.Disk VM.Config.HWType VM.Config.Memory VM.Config.Network VM.Config.Options VM.Monitor VM.Migrate VM.PowerMgmt SDN.Use"
+  # Mode le plus robuste: token root@pam sans séparation de privilèges.
+  TOKEN_USER="${PROXMOX_USER}"
+  if [[ "$TOKEN_USER" != *"@"* ]]; then
+    TOKEN_USER="root@pam"
   fi
-
-  if ! pveum user list | awk '{print $1}' | grep -qx "$TOKEN_USER"; then
-    pveum user add "$TOKEN_USER"
-  fi
-
-  pveum aclmod / -user "$TOKEN_USER" -role "$USER_ROLE" >/dev/null 2>&1 || true
 
   pveum user token delete "$TOKEN_USER" "$TOKEN_NAME" >/dev/null 2>&1 || true
   local token_output
-  token_output="$(pveum user token add "$TOKEN_USER" "$TOKEN_NAME" --privsep "$PROXMOX_TOKEN_PRIVSEP" --output-format json)"
+  token_output="$(pveum user token add "$TOKEN_USER" "$TOKEN_NAME" --privsep 0 --output-format json)"
 
   PROXMOX_TOKEN_ID="${TOKEN_USER}!${TOKEN_NAME}"
   PROXMOX_TOKEN_SECRET="$(echo "$token_output" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
   AUTO_TOKEN_CREATED=1
 
-  pveum aclmod / -token "$PROXMOX_TOKEN_ID" -role "$USER_ROLE" >/dev/null 2>&1 || true
   if [[ -z "$PROXMOX_TOKEN_SECRET" ]]; then
     echo "[ERROR] Failed to create Proxmox API token secret."
     exit 1
   fi
+}
+
+token_has_provider_level_access() {
+  local base_url status
+  base_url="${PROXMOX_API_URL%/api2/json}"
+  status="$(curl -k -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+    "${base_url}/api2/json/access/users")"
+  [[ "$status" == "200" ]]
+}
+
+password_has_provider_level_access() {
+  local base_url auth_response ticket status
+  base_url="${PROXMOX_API_URL%/api2/json}"
+  auth_response="$(curl -k -s \
+    --data-urlencode "username=${PROXMOX_USER}" \
+    --data-urlencode "password=${PROXMOX_PASSWORD}" \
+    "${base_url}/api2/json/access/ticket")"
+  ticket="$(echo "$auth_response" | sed -n 's/.*"ticket"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  [[ -z "$ticket" ]] && return 1
+
+  status="$(curl -k -s -o /dev/null -w "%{http_code}" \
+    -H "Cookie: PVEAuthCookie=${ticket}" \
+    "${base_url}/api2/json/access/users")"
+  [[ "$status" == "200" ]]
 }
 
 cleanup() {
@@ -101,6 +122,8 @@ write_env_file() {
 PROXMOX_API_URL=$PROXMOX_API_URL
 PROXMOX_TOKEN_ID=$PROXMOX_TOKEN_ID
 PROXMOX_TOKEN_SECRET=$PROXMOX_TOKEN_SECRET
+PROXMOX_USER=$PROXMOX_USER
+PROXMOX_PASSWORD=$PROXMOX_PASSWORD
 TARGET_NODE=$TARGET_NODE
 TEMPLATE_NAME=$TEMPLATE_NAME
 VM_STORAGE=$VM_STORAGE
@@ -115,6 +138,8 @@ write_tfvars() {
 pm_api_url = "$PROXMOX_API_URL"
 pm_api_token_id     = "$PROXMOX_TOKEN_ID"
 pm_api_token_secret = "$PROXMOX_TOKEN_SECRET"
+pm_user             = "$PROXMOX_USER"
+pm_password         = "$PROXMOX_PASSWORD"
 
 vm_name       = "$VM_PREFIX"
 target_node   = "$TARGET_NODE"
@@ -215,6 +240,20 @@ main() {
     echo "[INFO] Creating Proxmox token automatically..."
     if ! setup_token_when_possible; then
       echo "[ERROR] Could not auto-create token. Export PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET, or run as root on Proxmox host."
+      exit 1
+    fi
+  fi
+
+  if ! token_has_provider_level_access; then
+    echo "[WARN] Token valid but insufficient for provider checks. Switching to password auth."
+    PROXMOX_TOKEN_ID=""
+    PROXMOX_TOKEN_SECRET=""
+    if [[ -z "$PROXMOX_PASSWORD" && -t 0 ]]; then
+      read -r -s -p "Proxmox password for ${PROXMOX_USER}: " PROXMOX_PASSWORD
+      echo ""
+    fi
+    if [[ -z "$PROXMOX_PASSWORD" ]] || ! password_has_provider_level_access; then
+      echo "[ERROR] Password fallback failed. Set PROXMOX_PASSWORD and retry."
       exit 1
     fi
   fi
