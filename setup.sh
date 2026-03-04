@@ -59,7 +59,7 @@ UPTIME_CORES="${UPTIME_CORES:-2}"
 UPTIME_MEMORY="${UPTIME_MEMORY:-2048}"
 UPTIME_DISK="${UPTIME_DISK:-15G}"
 WSERV_NAME="${WSERV_NAME:-wserv}"
-WSERV_VM_ID="${WSERV_VM_ID:-201}"
+WSERV_VM_ID="${WSERV_VM_ID:-210}"
 WSERV_CORES="${WSERV_CORES:-4}"
 WSERV_MEMORY="${WSERV_MEMORY:-6144}"
 WSERV_DISK="${WSERV_DISK:-40G}"
@@ -352,6 +352,7 @@ prompt_deployment_plan_if_interactive() {
   if [[ "$DEPLOY_WSERV" == "1" ]]; then
     log_info "Configuration Windows Server"
     prompt_with_default WINDOWS_TEMPLATE_VMID "VMID template Windows à cloner" "$WINDOWS_TEMPLATE_VMID"
+    prompt_with_default WSERV_VM_ID "VMID cible de la VM Windows (nouvelle VM)" "$WSERV_VM_ID"
   fi
 
   if [[ "$use_defaults" == "n" || "$use_defaults" == "N" ]]; then
@@ -378,7 +379,6 @@ prompt_deployment_plan_if_interactive() {
     fi
     if [[ "$DEPLOY_WSERV" == "1" ]]; then
       prompt_with_default WSERV_NAME "Nom VM Windows" "$WSERV_NAME"
-      prompt_with_default WSERV_VM_ID "VMID Windows" "$WSERV_VM_ID"
       prompt_with_default WSERV_CORES "CPU Windows" "$WSERV_CORES"
       prompt_with_default WSERV_MEMORY "RAM Windows (MB)" "$WSERV_MEMORY"
       prompt_with_default WSERV_DISK "Disque Windows" "$WSERV_DISK"
@@ -396,6 +396,18 @@ prompt_deployment_plan_if_interactive() {
         WINDOWS_ENABLE_AGENT=0
       fi
     fi
+  fi
+}
+
+validate_windows_plan() {
+  if [[ "$DEPLOY_WSERV" != "1" ]]; then
+    return 0
+  fi
+
+  if [[ "$WSERV_VM_ID" == "$WINDOWS_TEMPLATE_VMID" ]]; then
+    log_err "Configuration invalide: VMID cible (${WSERV_VM_ID}) identique au VMID template (${WINDOWS_TEMPLATE_VMID})."
+    log_err "Utilise deux VMID différents (ex: template=201, cible=210)."
+    exit 1
   fi
 }
 
@@ -644,6 +656,7 @@ main() {
   log_ok "SSH public key ready."
 
   prompt_deployment_plan_if_interactive
+  validate_windows_plan
   if [[ "$DEPLOY_WSERV" == "1" ]]; then
     log_info "wSERV sélectionné."
   fi
