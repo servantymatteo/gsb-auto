@@ -88,8 +88,8 @@ generate_proxmox_token_secret() {
   token_name="${token_id#*!}"
   generated_name="${token_name}-$(date +%s)"
 
-  out=$(pveum user token add "$user_part" "$generated_name" --privsep 0 2>/dev/null || true)
-  generated_secret=$(echo "$out" | awk '/value/ {print $2; exit}')
+  out=$(pveum user token add "$user_part" "$generated_name" --privsep 0 --output-format json 2>/dev/null || true)
+  generated_secret=$(echo "$out" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 
   if [[ -n "$generated_secret" ]]; then
     PROXMOX_TOKEN_ID="${user_part}!${generated_name}"
