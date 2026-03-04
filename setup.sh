@@ -45,7 +45,7 @@ TOKEN_NAME="${TOKEN_NAME:-auto-token}"
 PROXMOX_TOKEN_PRIVSEP="${PROXMOX_TOKEN_PRIVSEP:-0}"
 PROXMOX_USER="${PROXMOX_USER:-root@pam}"
 PROXMOX_PASSWORD="${PROXMOX_PASSWORD:-}"
-PROXMOX_AUTH_PREFERENCE="password"
+PROXMOX_AUTH_PREFERENCE="${PROXMOX_AUTH_PREFERENCE:-token}"
 
 DEPLOY_APACHE="${DEPLOY_APACHE:-1}"
 DEPLOY_GLPI="${DEPLOY_GLPI:-1}"
@@ -55,6 +55,7 @@ SSH_PUB_KEY=""
 PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
 PROXMOX_TOKEN_SECRET="${PROXMOX_TOKEN_SECRET:-}"
 AUTH_MODE_SELECTED=""
+AUTO_TOKEN_CREATED=0
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -80,6 +81,44 @@ detect_or_create_ssh_key() {
   mkdir -p ssh
   ssh-keygen -t ed25519 -f "ssh/id_ed25519_terraform" -N "" -C "terraform-gsb" >/dev/null 2>&1
   cat "ssh/id_ed25519_terraform.pub"
+}
+
+setup_token_when_possible() {
+  if [[ $EUID -ne 0 ]] || ! command -v pveum >/dev/null 2>&1; then
+    return 1
+  fi
+
+  TOKEN_USER="${PROXMOX_USER}"
+  [[ "$TOKEN_USER" != *"@"* ]] && TOKEN_USER="root@pam"
+
+  pveum user token delete "$TOKEN_USER" "$TOKEN_NAME" >/dev/null 2>&1 || true
+  local token_output
+  token_output="$(pveum user token add "$TOKEN_USER" "$TOKEN_NAME" --privsep 0 --output-format json)"
+
+  PROXMOX_TOKEN_ID="${TOKEN_USER}!${TOKEN_NAME}"
+  PROXMOX_TOKEN_SECRET="$(echo "$token_output" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  AUTO_TOKEN_CREATED=1
+
+  pveum aclmod / -token "$PROXMOX_TOKEN_ID" -role Administrator >/dev/null 2>&1 || true
+  [[ -n "$PROXMOX_TOKEN_SECRET" ]]
+}
+
+token_has_provider_level_access() {
+  local base_url status
+  base_url="${PROXMOX_API_URL%/api2/json}"
+  status="$(curl -k -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+    "${base_url}/api2/json/access/users")"
+  [[ "$status" == "200" ]]
+}
+
+token_has_vm_monitor_access() {
+  local base_url status
+  base_url="${PROXMOX_API_URL%/api2/json}"
+  status="$(curl -k -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+    "${base_url}/api2/json/nodes/${TARGET_NODE}/lxc")"
+  [[ "$status" == "200" ]]
 }
 
 password_has_provider_level_access() {
@@ -121,6 +160,10 @@ cleanup() {
 
   rm -f .env.local
   rm -f terraform/terraform.tfvars
+
+  if [[ $AUTO_TOKEN_CREATED -eq 1 && $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
+    pveum user token delete "$TOKEN_USER" "$TOKEN_NAME" >/dev/null 2>&1 || true
+  fi
 }
 
 write_env_file() {
@@ -216,6 +259,7 @@ run_terraform() {
   # Empêche les variables d'environnement Proxmox de surcharger le mode d'auth choisi.
   unset PM_API_TOKEN_ID PM_API_TOKEN_SECRET PM_USER PM_PASS PM_PASSWORD
   unset PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET
+  unset PROXMOX_VE_API_TOKEN PROXMOX_VE_USERNAME PROXMOX_VE_PASSWORD PROXMOX_VE_AUTH_TICKET PROXMOX_VE_CSRF_PREVENTION_TOKEN
 
   pushd terraform >/dev/null
   log_title "Terraform Init"
@@ -243,9 +287,9 @@ print_service_urls() {
   echo "Services:"
   local ip_web ip_glpi ip_uptime
   pushd terraform >/dev/null
-  ip_web="$(terraform state show 'proxmox_lxc.container["web"]' 2>/dev/null | grep "ipv4_addresses" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
-  ip_glpi="$(terraform state show 'proxmox_lxc.container["glpi"]' 2>/dev/null | grep "ipv4_addresses" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
-  ip_uptime="$(terraform state show 'proxmox_lxc.container["monitoring"]' 2>/dev/null | grep "ipv4_addresses" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
+  ip_web="$(terraform state show 'proxmox_virtual_environment_container.container["web"]' 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
+  ip_glpi="$(terraform state show 'proxmox_virtual_environment_container.container["glpi"]' 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
+  ip_uptime="$(terraform state show 'proxmox_virtual_environment_container.container["monitoring"]' 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
   popd >/dev/null
 
   [[ -n "$ip_web" ]] && echo "- Apache: http://$ip_web"
@@ -265,18 +309,41 @@ main() {
   log_ok "SSH public key ready."
 
   log_title "Validation Auth Proxmox"
-  prompt_password_if_missing
-  if [[ $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
-    pveum aclmod / -user "$PROXMOX_USER" -role Administrator >/dev/null 2>&1 || true
+  if [[ "$PROXMOX_AUTH_PREFERENCE" == "token" ]]; then
+    log_info "Authentification préférée: API token"
+    if [[ -z "$PROXMOX_TOKEN_ID" || -z "$PROXMOX_TOKEN_SECRET" ]]; then
+      log_info "Creating Proxmox token automatically..."
+      if setup_token_when_possible; then
+        log_ok "Token created: ${PROXMOX_TOKEN_ID}"
+      else
+        log_warn "Token auto-creation unavailable, fallback to password."
+      fi
+    fi
+
+    if [[ -n "$PROXMOX_TOKEN_ID" && -n "$PROXMOX_TOKEN_SECRET" ]] && token_has_provider_level_access && token_has_vm_monitor_access; then
+      AUTH_MODE_SELECTED="token"
+      log_ok "Token auth validated with VM.Monitor access."
+    else
+      log_warn "Token auth invalid or missing VM.Monitor. Switching to password."
+      PROXMOX_TOKEN_ID=""
+      PROXMOX_TOKEN_SECRET=""
+    fi
   fi
-  if password_has_provider_level_access && password_has_vm_monitor_access; then
-    AUTH_MODE_SELECTED="password"
-    PROXMOX_TOKEN_ID=""
-    PROXMOX_TOKEN_SECRET=""
-    log_ok "Password auth validated with VM.Monitor access."
-  else
-    log_err "Password auth failed (provider or VM.Monitor access missing)."
-    exit 1
+
+  if [[ -z "$AUTH_MODE_SELECTED" ]]; then
+    prompt_password_if_missing
+    if [[ $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
+      pveum aclmod / -user "$PROXMOX_USER" -role Administrator >/dev/null 2>&1 || true
+    fi
+    if password_has_provider_level_access && password_has_vm_monitor_access; then
+      AUTH_MODE_SELECTED="password"
+      PROXMOX_TOKEN_ID=""
+      PROXMOX_TOKEN_SECRET=""
+      log_ok "Password auth validated with VM.Monitor access."
+    else
+      log_err "Password auth failed (provider or VM.Monitor access missing)."
+      exit 1
+    fi
   fi
 
   log_title "Génération Config"
