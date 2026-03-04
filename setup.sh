@@ -71,12 +71,15 @@ WINDOWS_DOMAIN_NETBIOS="${WINDOWS_DOMAIN_NETBIOS:-GSB}"
 WINDOWS_SAFE_MODE_PASSWORD="${WINDOWS_SAFE_MODE_PASSWORD:-Formation13@}"
 WINDOWS_ENABLE_AGENT="${WINDOWS_ENABLE_AGENT:-0}"
 WSERV_IP="${WSERV_IP:-}"
+WINDOWS_IP_WAIT_SECONDS="${WINDOWS_IP_WAIT_SECONDS:-180}"
+WINDOWS_IP_RETRY_INTERVAL="${WINDOWS_IP_RETRY_INTERVAL:-5}"
 
 SSH_PUB_KEY=""
 PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
 PROXMOX_TOKEN_SECRET="${PROXMOX_TOKEN_SECRET:-}"
 AUTH_MODE_SELECTED=""
 AUTO_TOKEN_CREATED=0
+WSERV_RESOLVED_IP=""
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -255,6 +258,30 @@ resolve_windows_ip() {
 
   [[ -z "$ip" && -n "$WSERV_IP" ]] && ip="$WSERV_IP"
   echo "$ip"
+}
+
+wait_for_windows_ip() {
+  local waited=0
+  local timeout="$WINDOWS_IP_WAIT_SECONDS"
+  local interval="$WINDOWS_IP_RETRY_INTERVAL"
+  local ip=""
+
+  while [[ "$waited" -le "$timeout" ]]; do
+    ip="$(resolve_windows_ip)"
+    if [[ -n "$ip" ]]; then
+      WSERV_RESOLVED_IP="$ip"
+      return 0
+    fi
+
+    if [[ "$waited" -eq 0 ]]; then
+      log_info "Attente de l'IP Windows via QEMU Guest Agent (${timeout}s max)..."
+    fi
+
+    sleep "$interval"
+    waited=$((waited + interval))
+  done
+
+  return 1
 }
 
 cleanup() {
@@ -522,7 +549,8 @@ print_service_urls() {
   ip_glpi="$(resolve_container_ip "$GLPI_NAME")"
   ip_uptime="$(resolve_container_ip "$UPTIME_NAME")"
   popd >/dev/null
-  ip_wserv="$(resolve_windows_ip)"
+  ip_wserv="${WSERV_RESOLVED_IP:-}"
+  [[ -z "$ip_wserv" ]] && ip_wserv="$(resolve_windows_ip)"
 
   if [[ "$DEPLOY_APACHE" == "1" ]]; then
     echo ""
@@ -584,13 +612,16 @@ provision_windows_after_apply() {
     fi
   fi
 
-  local wip=""
-  wip="$(resolve_windows_ip)"
-
+  local wip="${WSERV_RESOLVED_IP:-}"
   if [[ -z "$wip" ]]; then
-    log_warn "IP Windows non trouvée, provisioning Windows ignoré."
-    return 0
+    if ! wait_for_windows_ip; then
+      log_warn "IP Windows non trouvée, provisioning Windows ignoré."
+      return 0
+    fi
+    wip="${WSERV_RESOLVED_IP:-}"
   fi
+
+  log_ok "IP Windows détectée: $wip"
 
   log_title "Provisionnement Windows"
   if [[ -x "./scripts/provision_windows.sh" ]]; then
