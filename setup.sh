@@ -18,6 +18,8 @@ CLOCK="⏱"
 ROCKET="🚀"
 GEAR="⚙️"
 MAX_APPLY_ATTEMPTS=3
+AUTO_GENERATED_TOKEN=0
+AUTO_GENERATED_TOKEN_ID=""
 
 START_TIME=$(date +%s)
 ENV_FILE=".env.local"
@@ -95,6 +97,8 @@ generate_proxmox_token_secret() {
     full_token_id="${user_part}!${generated_name}"
     PROXMOX_TOKEN_ID="$full_token_id"
     PROXMOX_TOKEN_SECRET="$generated_secret"
+    AUTO_GENERATED_TOKEN=1
+    AUTO_GENERATED_TOKEN_ID="$full_token_id"
 
     # Applique explicitement les permissions token pour éviter les erreurs API (ex: VM.Monitor).
     pveum aclmod / -token "$full_token_id" -role PVEAdmin >/dev/null 2>&1 || \
@@ -127,6 +131,34 @@ ensure_proxmox_token_acl() {
   pveum aclmod / -user "$user_part" -role PVEAdmin >/dev/null 2>&1 || true
 
   return 0
+}
+
+cleanup_everything() {
+  echo ""
+  echo -e "${YELLOW}${ARROW} Nettoyage final (tokens/fichiers)...${NC}"
+
+  if [[ $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
+    if [[ -n "$PROXMOX_TOKEN_ID" && "$PROXMOX_TOKEN_ID" == *"!"* ]]; then
+      local token_user="${PROXMOX_TOKEN_ID%%!*}"
+      local token_name="${PROXMOX_TOKEN_ID#*!}"
+      pveum user token delete "$token_user" "$token_name" >/dev/null 2>&1 || true
+    fi
+
+    if [[ $AUTO_GENERATED_TOKEN -eq 1 && -n "$AUTO_GENERATED_TOKEN_ID" && "$AUTO_GENERATED_TOKEN_ID" != "$PROXMOX_TOKEN_ID" ]]; then
+      local auto_user="${AUTO_GENERATED_TOKEN_ID%%!*}"
+      local auto_name="${AUTO_GENERATED_TOKEN_ID#*!}"
+      pveum user token delete "$auto_user" "$auto_name" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  rm -f "$ENV_FILE"
+  rm -f terraform/terraform.tfvars
+  rm -f terraform/terraform.tfstate terraform/terraform.tfstate.backup
+  rm -rf terraform/.terraform terraform/.terraform.lock.hcl
+  rm -f .terraform.lock.hcl
+  rm -f ssh/id_ed25519_terraform ssh/id_ed25519_terraform.pub
+
+  echo -e "${GREEN}${CHECK} Nettoyage terminé${NC}"
 }
 
 detect_or_create_ssh_key() {
@@ -512,3 +544,5 @@ else
   echo -e "  ${BOLD}cd terraform && terraform apply --auto-approve${NC}"
   echo ""
 fi
+
+cleanup_everything
