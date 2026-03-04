@@ -17,6 +17,7 @@ ARROW="→"
 CLOCK="⏱"
 ROCKET="🚀"
 GEAR="⚙️"
+MAX_APPLY_ATTEMPTS=3
 
 # Démarrer le timer
 START_TIME=$(date +%s)
@@ -229,6 +230,7 @@ echo ""
 
 echo -e "${BOLD}${YELLOW}Lancer le déploiement maintenant ? (o/n)${NC}"
 read -p "> " launch
+launch=${launch:-o}
 
 if [[ "$launch" == "o" || "$launch" == "O" ]]; then
     echo ""
@@ -238,8 +240,33 @@ if [[ "$launch" == "o" || "$launch" == "O" ]]; then
     echo ""
 
     DEPLOY_START=$(date +%s)
-    cd terraform && TF_IN_AUTOMATION=1 terraform apply --auto-approve -compact-warnings
-    DEPLOY_STATUS=$?
+    cd terraform
+
+    echo -e "${CYAN}${ARROW} Initialisation de Terraform...${NC}"
+    TF_IN_AUTOMATION=1 terraform init -input=false -compact-warnings
+    INIT_STATUS=$?
+
+    DEPLOY_STATUS=1
+    if [ $INIT_STATUS -eq 0 ]; then
+        for attempt in $(seq 1 $MAX_APPLY_ATTEMPTS); do
+            echo ""
+            echo -e "${CYAN}${ARROW} Terraform apply (tentative ${attempt}/${MAX_APPLY_ATTEMPTS})...${NC}"
+            TF_IN_AUTOMATION=1 terraform apply --auto-approve -compact-warnings
+            DEPLOY_STATUS=$?
+
+            if [ $DEPLOY_STATUS -eq 0 ]; then
+                break
+            fi
+
+            if [ $attempt -lt $MAX_APPLY_ATTEMPTS ]; then
+                echo -e "${YELLOW}${ARROW} Échec, nouvelle tentative dans 8 secondes...${NC}"
+                sleep 8
+            fi
+        done
+    else
+        DEPLOY_STATUS=$INIT_STATUS
+    fi
+
     cd ..
     DEPLOY_END=$(date +%s)
     DEPLOY_TIME=$((DEPLOY_END - DEPLOY_START))

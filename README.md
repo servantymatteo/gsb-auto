@@ -66,7 +66,13 @@ Le script vous demandera :
 1. Le préfixe des containers (ex: SIO2027)
 2. Quels services vous voulez installer (Apache, GLPI, etc.)
 3. Les ressources pour chaque container (CPU, RAM, disque)
-4. Si vous voulez lancer le déploiement immédiatement
+4. Si vous voulez lancer le déploiement immédiatement (Entrée = oui)
+
+Le déploiement via `setup.sh` gère automatiquement :
+- `terraform init`
+- jusqu'à 3 tentatives de `terraform apply`
+
+=> Pas besoin de relancer manuellement une 2e commande en cas d'échec transitoire.
 
 ### Méthode 2 : Configuration manuelle
 
