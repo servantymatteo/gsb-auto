@@ -107,6 +107,28 @@ generate_proxmox_token_secret() {
   return 1
 }
 
+ensure_proxmox_token_acl() {
+  local token_id="$1"
+  local user_part
+
+  if [[ $EUID -ne 0 ]] || ! command -v pveum >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if [[ -z "$token_id" || "$token_id" != *"!"* ]]; then
+    return 1
+  fi
+
+  user_part="${token_id%%!*}"
+
+  # Couvre les variantes selon version Proxmox.
+  pveum aclmod / -token "$token_id" -role PVEAdmin >/dev/null 2>&1 || \
+  pveum aclmod / --tokens "$token_id" --roles PVEAdmin >/dev/null 2>&1 || \
+  pveum aclmod / -user "$user_part" -role PVEAdmin >/dev/null 2>&1 || true
+
+  return 0
+}
+
 detect_or_create_ssh_key() {
   local project_key="ssh/id_ed25519_terraform.pub"
   local user_key_ed25519="$HOME/.ssh/id_ed25519.pub"
@@ -188,6 +210,11 @@ if is_placeholder "$PROXMOX_TOKEN_SECRET"; then
   else
     prompt_required "PROXMOX_TOKEN_SECRET" "Token secret Proxmox" "" "true"
   fi
+fi
+
+# Si le script tourne en admin sur Proxmox, applique les ACL nécessaires même pour un token existant.
+if ensure_proxmox_token_acl "$PROXMOX_TOKEN_ID"; then
+  echo -e "${GREEN}${CHECK} Permissions token Proxmox vérifiées/appliquées (PVEAdmin)${NC}"
 fi
 
 if is_placeholder "$SSH_KEYS"; then
