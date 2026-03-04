@@ -1,7 +1,8 @@
 terraform {
   required_providers {
     proxmox = {
-      source = "bpg/proxmox"
+      source  = "bpg/proxmox"
+      version = ">= 0.50.0"
     }
   }
 }
@@ -13,7 +14,8 @@ locals {
 provider "proxmox" {
   endpoint = local.proxmox_endpoint
 
-  # API token format attendu par bpg/proxmox: user@realm!tokenid=secret
+  # Même format que le repo de référence:
+  # api_token = "${var.proxmox_api_token_id}=${var.proxmox_api_token}"
   api_token = var.pm_api_token_id != "" && var.pm_api_token_secret != "" ? "${var.pm_api_token_id}=${var.pm_api_token_secret}" : null
 
   username = var.pm_user != "" ? var.pm_user : null
