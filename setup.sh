@@ -123,7 +123,6 @@ setup_token_when_possible() {
   PROXMOX_TOKEN_SECRET="$(echo "$token_output" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
   AUTO_TOKEN_CREATED=1
 
-  pveum aclmod / -token "$PROXMOX_TOKEN_ID" -role Administrator >/dev/null 2>&1 || true
   [[ -n "$PROXMOX_TOKEN_SECRET" ]]
 }
 
@@ -293,6 +292,7 @@ cleanup() {
   rm -f terraform/terraform.tfvars
 
   if [[ $AUTO_TOKEN_CREATED -eq 1 && $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
+    pveum aclmod / -delete -token "$TOKEN_USER!$TOKEN_NAME" >/dev/null 2>&1 || true
     pveum user token delete "$TOKEN_USER" "$TOKEN_NAME" >/dev/null 2>&1 || true
   fi
 }
