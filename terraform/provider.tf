@@ -1,22 +1,23 @@
 terraform {
   required_providers {
     proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
+      source = "bpg/proxmox"
     }
   }
 }
 
+locals {
+  proxmox_endpoint = trimsuffix(trimsuffix(var.pm_api_url, "/api2/json"), "/")
+}
+
 provider "proxmox" {
-  pm_api_url = var.pm_api_url
+  endpoint = local.proxmox_endpoint
 
-  # Authentification par API Token (si défini)
-  pm_api_token_id     = var.pm_api_token_id != "" ? var.pm_api_token_id : null
-  pm_api_token_secret = var.pm_api_token_secret != "" ? var.pm_api_token_secret : null
+  # API token format attendu par bpg/proxmox: user@realm!tokenid=secret
+  api_token = var.pm_api_token_id != "" && var.pm_api_token_secret != "" ? "${var.pm_api_token_id}=${var.pm_api_token_secret}" : null
 
-  # Authentification par mot de passe (si défini)
-  pm_user     = var.pm_user != "" ? var.pm_user : null
-  pm_password = var.pm_password != "" ? var.pm_password : null
+  username = var.pm_user != "" ? var.pm_user : null
+  password = var.pm_password != "" ? var.pm_password : null
 
-  pm_tls_insecure = var.pm_tls_insecure
+  insecure = var.pm_tls_insecure
 }
