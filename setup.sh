@@ -133,6 +133,24 @@ ensure_proxmox_token_acl() {
   return 0
 }
 
+proxmox_token_is_valid() {
+  local api_url="$1"
+  local token_id="$2"
+  local token_secret="$3"
+  local base_url status
+
+  if [[ -z "$api_url" || -z "$token_id" || -z "$token_secret" ]]; then
+    return 1
+  fi
+
+  base_url="${api_url%/api2/json}"
+  status=$(curl -k -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: PVEAPIToken=${token_id}=${token_secret}" \
+    "${base_url}/api2/json/version")
+
+  [[ "$status" == "200" ]]
+}
+
 cleanup_everything() {
   echo ""
   echo -e "${YELLOW}${ARROW} Nettoyage final (tokens/fichiers)...${NC}"
@@ -247,6 +265,17 @@ fi
 # Si le script tourne en admin sur Proxmox, applique les ACL nécessaires même pour un token existant.
 if ensure_proxmox_token_acl "$PROXMOX_TOKEN_ID"; then
   echo -e "${GREEN}${CHECK} Permissions token Proxmox vérifiées/appliquées (PVEAdmin)${NC}"
+fi
+
+if ! proxmox_token_is_valid "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET"; then
+  echo -e "${YELLOW}${ARROW} Token Proxmox invalide, tentative de régénération automatique...${NC}"
+  if generate_proxmox_token_secret "$PROXMOX_TOKEN_ID" && proxmox_token_is_valid "$PROXMOX_API_URL" "$PROXMOX_TOKEN_ID" "$PROXMOX_TOKEN_SECRET"; then
+    echo -e "${GREEN}${CHECK} Nouveau token Proxmox valide: ${PROXMOX_TOKEN_ID}${NC}"
+  else
+    echo -e "${RED}${CROSS} Authentification Proxmox invalide (token)${NC}"
+    echo -e "${YELLOW}Vérifie PROXMOX_API_URL et les droits du token, puis relance.${NC}"
+    exit 1
+  fi
 fi
 
 if is_placeholder "$SSH_KEYS"; then
