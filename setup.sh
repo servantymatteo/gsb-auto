@@ -4,6 +4,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# UI
+BLUE='\033[0;34m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+log_title() { echo -e "\n${BOLD}${CYAN}== $* ==${NC}"; }
+log_info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
+log_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_err()   { echo -e "${RED}[ERROR]${NC} $*"; }
+
 MAX_APPLY_ATTEMPTS="${MAX_APPLY_ATTEMPTS:-3}"
 CLEANUP_AT_END="${CLEANUP_AT_END:-1}"
 VM_PREFIX="${VM_PREFIX:-GSB}"
@@ -30,7 +45,7 @@ AUTO_TOKEN_CREATED=0
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
-    echo "[ERROR] Command not found: $1"
+    log_err "Command not found: $1"
     exit 1
   }
 }
@@ -73,8 +88,11 @@ setup_token_when_possible() {
   PROXMOX_TOKEN_SECRET="$(echo "$token_output" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
   AUTO_TOKEN_CREATED=1
 
+  # Force explicit ACL on the token to satisfy provider permission checks.
+  pveum aclmod / -token "$PROXMOX_TOKEN_ID" -role Administrator >/dev/null 2>&1 || true
+
   if [[ -z "$PROXMOX_TOKEN_SECRET" ]]; then
-    echo "[ERROR] Failed to create Proxmox API token secret."
+    log_err "Failed to create Proxmox API token secret."
     exit 1
   fi
 }
@@ -85,6 +103,15 @@ token_has_provider_level_access() {
   status="$(curl -k -s -o /dev/null -w "%{http_code}" \
     -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
     "${base_url}/api2/json/access/users")"
+  [[ "$status" == "200" ]]
+}
+
+token_has_vm_monitor_access() {
+  local base_url status
+  base_url="${PROXMOX_API_URL%/api2/json}"
+  status="$(curl -k -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+    "${base_url}/api2/json/nodes/${TARGET_NODE}/lxc")"
   [[ "$status" == "200" ]]
 }
 
@@ -101,6 +128,22 @@ password_has_provider_level_access() {
   status="$(curl -k -s -o /dev/null -w "%{http_code}" \
     -H "Cookie: PVEAuthCookie=${ticket}" \
     "${base_url}/api2/json/access/users")"
+  [[ "$status" == "200" ]]
+}
+
+password_has_vm_monitor_access() {
+  local base_url auth_response ticket status
+  base_url="${PROXMOX_API_URL%/api2/json}"
+  auth_response="$(curl -k -s \
+    --data-urlencode "username=${PROXMOX_USER}" \
+    --data-urlencode "password=${PROXMOX_PASSWORD}" \
+    "${base_url}/api2/json/access/ticket")"
+  ticket="$(echo "$auth_response" | sed -n 's/.*"ticket"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  [[ -z "$ticket" ]] && return 1
+
+  status="$(curl -k -s -o /dev/null -w "%{http_code}" \
+    -H "Cookie: PVEAuthCookie=${ticket}" \
+    "${base_url}/api2/json/nodes/${TARGET_NODE}/lxc")"
   [[ "$status" == "200" ]]
 }
 
@@ -193,16 +236,18 @@ EOF
 
 run_terraform() {
   pushd terraform >/dev/null
+  log_title "Terraform Init"
   TF_IN_AUTOMATION=1 terraform init -input=false -compact-warnings
 
   local attempt
   for attempt in $(seq 1 "$MAX_APPLY_ATTEMPTS"); do
-    echo "[INFO] terraform apply attempt ${attempt}/${MAX_APPLY_ATTEMPTS}"
+    log_title "Terraform Apply ${attempt}/${MAX_APPLY_ATTEMPTS}"
     if TF_IN_AUTOMATION=1 terraform apply --auto-approve -compact-warnings; then
       popd >/dev/null
       return 0
     fi
     if [[ "$attempt" -lt "$MAX_APPLY_ATTEMPTS" ]]; then
+      log_warn "Apply failed, retry in 8s..."
       sleep 8
     fi
   done
@@ -229,43 +274,50 @@ print_service_urls() {
 main() {
   trap cleanup EXIT
 
+  log_title "Préparation"
   need_cmd terraform
   need_cmd curl
   need_cmd ssh-keygen
 
   SSH_PUB_KEY="$(detect_or_create_ssh_key)"
-  echo "[INFO] SSH public key ready."
+  log_ok "SSH public key ready."
 
   if [[ -z "$PROXMOX_TOKEN_ID" || -z "$PROXMOX_TOKEN_SECRET" ]]; then
-    echo "[INFO] Creating Proxmox token automatically..."
+    log_info "Creating Proxmox token automatically..."
     if ! setup_token_when_possible; then
-      echo "[ERROR] Could not auto-create token. Export PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET, or run as root on Proxmox host."
+      log_err "Could not auto-create token. Export PROXMOX_TOKEN_ID/PROXMOX_TOKEN_SECRET, or run as root on Proxmox host."
       exit 1
     fi
+    log_ok "Token created: ${PROXMOX_TOKEN_ID}"
   fi
 
-  if ! token_has_provider_level_access; then
-    echo "[WARN] Token valid but insufficient for provider checks. Switching to password auth."
+  log_title "Validation Auth Proxmox"
+  if ! token_has_provider_level_access || ! token_has_vm_monitor_access; then
+    log_warn "Token missing required provider permissions (including VM.Monitor). Switching to password auth."
     PROXMOX_TOKEN_ID=""
     PROXMOX_TOKEN_SECRET=""
     if [[ -z "$PROXMOX_PASSWORD" && -t 0 ]]; then
       read -r -s -p "Proxmox password for ${PROXMOX_USER}: " PROXMOX_PASSWORD
       echo ""
     fi
-    if [[ -z "$PROXMOX_PASSWORD" ]] || ! password_has_provider_level_access; then
-      echo "[ERROR] Password fallback failed. Set PROXMOX_PASSWORD and retry."
+    if [[ -z "$PROXMOX_PASSWORD" ]] || ! password_has_provider_level_access || ! password_has_vm_monitor_access; then
+      log_err "Password fallback failed (provider or VM.Monitor access missing). Set PROXMOX_PASSWORD and retry."
       exit 1
     fi
+    log_ok "Password auth validated with VM.Monitor access."
+  else
+    log_ok "Token auth validated with VM.Monitor access."
   fi
 
+  log_title "Génération Config"
   write_env_file
   write_tfvars
 
   if run_terraform; then
-    echo "[OK] Deployment complete."
+    log_ok "Deployment complete."
     print_service_urls
   else
-    echo "[ERROR] terraform apply failed after ${MAX_APPLY_ATTEMPTS} attempts."
+    log_err "terraform apply failed after ${MAX_APPLY_ATTEMPTS} attempts."
     exit 1
   fi
 }
