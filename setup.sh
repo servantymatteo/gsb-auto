@@ -369,17 +369,45 @@ run_terraform() {
 
 print_service_urls() {
   echo ""
-  echo "Services:"
+  echo -e "${BOLD}${CYAN}=== Récapitulatif d'accès ===${NC}"
   local ip_web ip_glpi ip_uptime
   pushd terraform >/dev/null
-  ip_web="$(terraform state show 'proxmox_virtual_environment_container.container["web"]' 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
-  ip_glpi="$(terraform state show 'proxmox_virtual_environment_container.container["glpi"]' 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
-  ip_uptime="$(terraform state show 'proxmox_virtual_environment_container.container["monitoring"]' 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
+  ip_web="$(terraform state show "proxmox_virtual_environment_container.container[\"$WEB_NAME\"]" 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
+  ip_glpi="$(terraform state show "proxmox_virtual_environment_container.container[\"$GLPI_NAME\"]" 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
+  ip_uptime="$(terraform state show "proxmox_virtual_environment_container.container[\"$UPTIME_NAME\"]" 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
   popd >/dev/null
 
-  [[ -n "$ip_web" ]] && echo "- Apache: http://$ip_web"
-  [[ -n "$ip_glpi" ]] && echo "- GLPI: http://$ip_glpi/glpi (glpi / glpi)"
-  [[ -n "$ip_uptime" ]] && echo "- Uptime Kuma: http://$ip_uptime:3001"
+  if [[ "$DEPLOY_APACHE" == "1" ]]; then
+    echo ""
+    echo -e "${BOLD}Apache${NC}"
+    echo "  Container : ${VM_PREFIX}-${WEB_NAME}"
+    echo "  IP        : ${ip_web:-non trouvée}"
+    echo "  Port      : 80"
+    [[ -n "$ip_web" ]] && echo "  URL       : http://${ip_web}"
+    echo "  Login     : ${CI_USER} / ${CI_PASSWORD}"
+  fi
+
+  if [[ "$DEPLOY_GLPI" == "1" ]]; then
+    echo ""
+    echo -e "${BOLD}GLPI${NC}"
+    echo "  Container : ${VM_PREFIX}-${GLPI_NAME}"
+    echo "  IP        : ${ip_glpi:-non trouvée}"
+    echo "  Port      : 80"
+    [[ -n "$ip_glpi" ]] && echo "  URL       : http://${ip_glpi}/glpi"
+    echo "  Login CT  : ${CI_USER} / ${CI_PASSWORD}"
+    echo "  Login GLPI: glpi / glpi"
+  fi
+
+  if [[ "$DEPLOY_UPTIME" == "1" ]]; then
+    echo ""
+    echo -e "${BOLD}Uptime Kuma${NC}"
+    echo "  Container : ${VM_PREFIX}-${UPTIME_NAME}"
+    echo "  IP        : ${ip_uptime:-non trouvée}"
+    echo "  Port      : 3001"
+    [[ -n "$ip_uptime" ]] && echo "  URL       : http://${ip_uptime}:3001"
+    echo "  Login     : création au premier accès"
+  fi
+  echo ""
 }
 
 main() {
