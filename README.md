@@ -72,6 +72,14 @@ Variables utiles (optionnelles) :
 - `DEPLOY_APACHE=0|1`, `DEPLOY_GLPI=0|1`, `DEPLOY_UPTIME=0|1`
 - `PROXMOX_TOKEN_ID` / `PROXMOX_TOKEN_SECRET` (si tu ne veux pas l’auto-création)
 
+### Option : Créer une VM runner Terraform
+
+Depuis un nœud Proxmox (root) :
+
+```bash
+./scripts/bootstrap-runner.sh
+```
+
 ### Méthode 1 : Script interactif (recommandé)
 
 Lancez simplement le script de configuration :
