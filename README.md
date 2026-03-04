@@ -54,6 +54,24 @@ CI_PASSWORD=Formation13@
 
 ## Utilisation rapide
 
+### Méthode 0 : Déploiement one-shot (non interactif)
+
+```bash
+./setup.sh
+```
+
+Ce script fait tout en une fois :
+- création automatique token/ACL Proxmox (si exécuté en root sur Proxmox)
+- génération de `.env.local` et `terraform/terraform.tfvars`
+- `terraform init` + `terraform apply` (avec retry)
+- affichage final des URLs des services
+
+Variables utiles (optionnelles) :
+- `VM_PREFIX` (défaut: `GSB`)
+- `TARGET_NODE` (défaut: hostname courant)
+- `DEPLOY_APACHE=0|1`, `DEPLOY_GLPI=0|1`, `DEPLOY_UPTIME=0|1`
+- `PROXMOX_TOKEN_ID` / `PROXMOX_TOKEN_SECRET` (si tu ne veux pas l’auto-création)
+
 ### Méthode 1 : Script interactif (recommandé)
 
 Lancez simplement le script de configuration :
