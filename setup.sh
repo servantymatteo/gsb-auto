@@ -165,6 +165,64 @@ password_has_vm_monitor_access() {
   [[ "$status" == "200" ]]
 }
 
+get_ip_from_terraform_state() {
+  local resource_addr="$1"
+  terraform state show "$resource_addr" 2>/dev/null \
+    | grep -E 'ipv4|ip=' \
+    | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' \
+    | grep -v '^127\.' \
+    | head -n 1 || true
+}
+
+get_ip_from_proxmox_api() {
+  local container_full_name="$1"
+  local base_url auth_response ticket lxc_list vmid interfaces ip
+
+  base_url="${PROXMOX_API_URL%/api2/json}"
+
+  if [[ "$AUTH_MODE_SELECTED" == "token" && -n "$PROXMOX_TOKEN_ID" && -n "$PROXMOX_TOKEN_SECRET" ]]; then
+    lxc_list="$(curl -k -s -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+      "${base_url}/api2/json/nodes/${TARGET_NODE}/lxc" 2>/dev/null || true)"
+  else
+    auth_response="$(curl -k -s \
+      --data-urlencode "username=${PROXMOX_USER}" \
+      --data-urlencode "password=${PROXMOX_PASSWORD}" \
+      "${base_url}/api2/json/access/ticket" 2>/dev/null || true)"
+    ticket="$(echo "$auth_response" | sed -n 's/.*"ticket"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    [[ -z "$ticket" ]] && return 0
+    lxc_list="$(curl -k -s -H "Cookie: PVEAuthCookie=${ticket}" \
+      "${base_url}/api2/json/nodes/${TARGET_NODE}/lxc" 2>/dev/null || true)"
+  fi
+
+  vmid="$(echo "$lxc_list" | grep -o "{[^}]*\"name\":\"${container_full_name}\"[^}]*}" \
+    | grep -o '"vmid":[0-9]*' | grep -o '[0-9]*' | head -n 1 || true)"
+  [[ -z "$vmid" ]] && return 0
+
+  if [[ "$AUTH_MODE_SELECTED" == "token" && -n "$PROXMOX_TOKEN_ID" && -n "$PROXMOX_TOKEN_SECRET" ]]; then
+    interfaces="$(curl -k -s -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+      "${base_url}/api2/json/nodes/${TARGET_NODE}/lxc/${vmid}/interfaces" 2>/dev/null || true)"
+  else
+    interfaces="$(curl -k -s -H "Cookie: PVEAuthCookie=${ticket}" \
+      "${base_url}/api2/json/nodes/${TARGET_NODE}/lxc/${vmid}/interfaces" 2>/dev/null || true)"
+  fi
+
+  ip="$(echo "$interfaces" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '^127\.' | head -n 1 || true)"
+  echo "$ip"
+}
+
+resolve_container_ip() {
+  local short_name="$1"
+  local resource_addr="proxmox_virtual_environment_container.container[\"${short_name}\"]"
+  local full_name="${VM_PREFIX}-${short_name}"
+  local ip
+
+  ip="$(get_ip_from_terraform_state "$resource_addr")"
+  if [[ -z "$ip" ]]; then
+    ip="$(get_ip_from_proxmox_api "$full_name")"
+  fi
+  echo "$ip"
+}
+
 cleanup() {
   if [[ "$CLEANUP_AT_END" != "1" ]]; then
     return 0
@@ -372,9 +430,9 @@ print_service_urls() {
   echo -e "${BOLD}${CYAN}=== Récapitulatif d'accès ===${NC}"
   local ip_web ip_glpi ip_uptime
   pushd terraform >/dev/null
-  ip_web="$(terraform state show "proxmox_virtual_environment_container.container[\"$WEB_NAME\"]" 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
-  ip_glpi="$(terraform state show "proxmox_virtual_environment_container.container[\"$GLPI_NAME\"]" 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
-  ip_uptime="$(terraform state show "proxmox_virtual_environment_container.container[\"$UPTIME_NAME\"]" 2>/dev/null | grep -E 'ipv4|ip=' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
+  ip_web="$(resolve_container_ip "$WEB_NAME")"
+  ip_glpi="$(resolve_container_ip "$GLPI_NAME")"
+  ip_uptime="$(resolve_container_ip "$UPTIME_NAME")"
   popd >/dev/null
 
   if [[ "$DEPLOY_APACHE" == "1" ]]; then
@@ -384,7 +442,8 @@ print_service_urls() {
     echo "  IP        : ${ip_web:-non trouvée}"
     echo "  Port      : 80"
     [[ -n "$ip_web" ]] && echo "  URL       : http://${ip_web}"
-    echo "  Login     : ${CI_USER} / ${CI_PASSWORD}"
+    echo "  Login web : aucun (page web publique)"
+    echo "  Login CT  : ${CI_USER} / ${CI_PASSWORD}"
   fi
 
   if [[ "$DEPLOY_GLPI" == "1" ]]; then
