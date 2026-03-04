@@ -23,8 +23,8 @@ template_name = "debian-12-standard_12.12-1_amd64.tar.zst"
 vm_storage    = "local-lvm"
 
 # Cloud-init
-ci_user     = "votre-user"
-ci_password = "votre-password"
+ci_user     = "admin"
+ci_password = "Formation13@"
 ssh_keys    = "VOTRE-CLE-SSH-PUBLIQUE"
 
 # Définition des VMs à créer

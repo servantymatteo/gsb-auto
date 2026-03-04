@@ -5,6 +5,7 @@ resource "proxmox_virtual_environment_container" "container" {
   started       = true
   start_on_boot = true
   unprivileged  = true
+  tags          = [lower(var.vm_name), lower(each.key)]
 
   cpu {
     cores = each.value.cores
