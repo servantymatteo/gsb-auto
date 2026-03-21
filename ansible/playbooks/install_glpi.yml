@@ -1,5 +1,4 @@
 ---
-# PLAYBOOK ANSIBLE - Installation de GLPI
 - name: Installer et configurer GLPI sur le container
   hosts: all
   become: yes
@@ -7,7 +6,6 @@
   vars:
     glpi_version: "10.0.16"
     glpi_download_url: "https://github.com/glpi-project/glpi/releases/download/{{ glpi_version }}/glpi-{{ glpi_version }}.tgz"
-    mysql_root_password: "glpi_root_pass"
     glpi_db_name: "glpidb"
     glpi_db_user: "glpi_user"
     glpi_db_password: "glpi_password"
@@ -34,11 +32,22 @@
           - php-zip
           - php-bz2
           - php-cli
+          - php-apcu
+          - php-imap
           - python3-pymysql
           - sudo
           - wget
           - tar
         state: present
+
+    - name: Activer les modules Apache nécessaires
+      apache2_module:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rewrite
+        - headers
+      notify: Restart Apache
 
     - name: Démarrer et activer Apache
       systemd:
@@ -53,29 +62,41 @@
         enabled: yes
 
     - name: Créer la base de données GLPI
-      mysql_db:
+      community.mysql.mysql_db:
         name: "{{ glpi_db_name }}"
         state: present
         login_unix_socket: /var/run/mysqld/mysqld.sock
 
     - name: Créer l'utilisateur MySQL pour GLPI
-      mysql_user:
+      community.mysql.mysql_user:
         name: "{{ glpi_db_user }}"
         password: "{{ glpi_db_password }}"
         priv: "{{ glpi_db_name }}.*:ALL"
         state: present
         login_unix_socket: /var/run/mysqld/mysqld.sock
 
+    - name: Vérifier si GLPI est déjà téléchargé
+      stat:
+        path: "/tmp/glpi-{{ glpi_version }}.tgz"
+      register: glpi_archive
+
     - name: Télécharger GLPI
       get_url:
         url: "{{ glpi_download_url }}"
         dest: "/tmp/glpi-{{ glpi_version }}.tgz"
+      when: not glpi_archive.stat.exists
+
+    - name: Vérifier si GLPI est déjà extrait
+      stat:
+        path: /var/www/html/glpi
+      register: glpi_dir
 
     - name: Extraire GLPI dans /var/www/html
       unarchive:
         src: "/tmp/glpi-{{ glpi_version }}.tgz"
         dest: /var/www/html
         remote_src: yes
+      when: not glpi_dir.stat.exists
 
     - name: Définir les permissions sur le dossier GLPI
       file:
@@ -127,16 +148,12 @@
       copy:
         content: |
           #!/bin/bash
-
-          # Couleurs
           GREEN='\033[0;32m'
           BLUE='\033[0;34m'
           CYAN='\033[0;36m'
           YELLOW='\033[1;33m'
           BOLD='\033[1m'
           NC='\033[0m'
-
-          # Récupérer les informations
           HOSTNAME=$(hostname)
           IP=$(hostname -I | awk '{print $1}')
           UPTIME=$(uptime -p | sed 's/up //')
@@ -146,7 +163,6 @@
           MEM_TOTAL=$(free -h | awk '/^Mem:/ {print $2}')
           MEM_USED=$(free -h | awk '/^Mem:/ {print $3}')
           DISK_USED=$(df -h / | awk 'NR==2 {print $5}')
-
           echo ""
           echo -e "${BOLD}${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"
           echo -e "${BOLD}${GREEN}║            🎯 SERVEUR GLPI - PROXMOX LXC             ║${NC}"
@@ -195,15 +211,12 @@
           ┌────────────────────────────────────────────────┐
           │ Nom         : {{ glpi_db_name }}               │
           │ Utilisateur : {{ glpi_db_user }}               │
-          │ Mot de passe: {{ glpi_db_password }}           │
-          └────────────────────────────────────────────────┘
-
-          📋 Informations du serveur :
-          ┌────────────────────────────────────────────────┐
-          │ Hostname : {{ ansible_hostname }}              │
-          │ IP       : {{ ansible_default_ipv4.address }}  │
-          │ Version  : GLPI {{ glpi_version }}             │
           └────────────────────────────────────────────────┘
 
           ⚠️  IMPORTANT : Changez les mots de passe par défaut !
-          💡 La redirection automatique vers GLPI est active
+
+  handlers:
+    - name: Restart Apache
+      systemd:
+        name: apache2
+        state: restarted

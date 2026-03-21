@@ -45,16 +45,17 @@
         create_home: no
         system: yes
 
-    - name: Supprimer le répertoire Uptime Kuma s'il existe
-      file:
-        path: "{{ uptime_kuma_dir }}"
-        state: absent
+    - name: Vérifier si Uptime Kuma est déjà installé
+      stat:
+        path: "{{ uptime_kuma_dir }}/package.json"
+      register: uptime_kuma_installed
 
     - name: Cloner Uptime Kuma depuis GitHub
       git:
         repo: https://github.com/louislam/uptime-kuma.git
         dest: "{{ uptime_kuma_dir }}"
         version: "{{ uptime_kuma_version }}"
+      when: not uptime_kuma_installed.stat.exists
 
     - name: Définir les permissions sur le dossier Uptime Kuma
       file:
@@ -68,11 +69,13 @@
         path: "{{ uptime_kuma_dir }}"
         state: present
       become_user: "{{ uptime_kuma_user }}"
+      when: not uptime_kuma_installed.stat.exists
 
     - name: Build Uptime Kuma
       shell: npm run setup
       args:
         chdir: "{{ uptime_kuma_dir }}"
+        creates: "{{ uptime_kuma_dir }}/node_modules/.package-lock.json"
       become_user: "{{ uptime_kuma_user }}"
 
     - name: Créer le fichier de service systemd

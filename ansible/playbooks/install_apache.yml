@@ -14,50 +14,24 @@
   # Nécessaire pour installer des paquets
 
   tasks:
-    # "tasks" = liste des tâches à exécuter dans l'ordre
-
-    - name: S'assurer que SSH est installé et actif
-      # Première tâche : vérifier que SSH fonctionne
-      apt:
-        # Module "apt" = gère les paquets Debian/Ubuntu
-        name: openssh-server
-        # Nom du paquet à installer
-        state: present
-        # "present" = s'assurer que le paquet est installé
-        # Si déjà installé, ne fait rien
-
     - name: Mettre à jour le cache apt
-      # Équivalent de : apt-get update
       apt:
         update_cache: yes
-        # Télécharge la liste des paquets disponibles
         cache_valid_time: 3600
-        # Cache valide pendant 3600 secondes (1h)
-        # Si mis à jour il y a moins d'1h, ne refait pas l'update
 
     - name: Installer Apache2
-      # Installation du serveur web Apache
       apt:
         name: apache2
-        # Nom du paquet Apache
         state: present
-        # S'assurer qu'il est installé
 
     - name: Démarrer et activer Apache
-      # Démarre Apache maintenant ET au démarrage du système
       systemd:
-        # Module "systemd" = gère les services systemd
         name: apache2
-        # Nom du service
         state: started
-        # "started" = démarre le service s'il n'est pas démarré
         enabled: yes
-        # "enabled: yes" = démarre automatiquement au boot
 
     - name: Créer une page d'accueil personnalisée
-      # Remplace la page par défaut d'Apache
       copy:
-        # Module "copy" = copie du contenu vers un fichier
         content: |
           <!DOCTYPE html>
           <html>
@@ -93,17 +67,13 @@
         # {{ ansible_hostname }}, etc. = variables Ansible (facts)
         # Ansible collecte automatiquement ces infos sur l'hôte
         dest: /var/www/html/index.html
-        # Chemin de destination du fichier
-        # C'est la page par défaut d'Apache
 
     - name: Ouvrir le port 80 dans le firewall (si UFW actif)
-      # Optionnel : ouvre le port HTTP si un firewall est actif
       ufw:
         rule: allow
         port: '80'
         proto: tcp
       ignore_errors: yes
-      # "ignore_errors: yes" = continue même si UFW n'est pas installé
 
     - name: Créer un MOTD personnalisé
       copy:
@@ -156,12 +126,10 @@
         mode: '0755'
 
     - name: Vérifier le statut d'Apache
-      # Vérifie qu'Apache fonctionne correctement
       systemd:
         name: apache2
         state: started
       register: apache_status
-      # "register" = sauvegarde le résultat dans une variable
 
     - name: Afficher les informations de connexion
       debug:
