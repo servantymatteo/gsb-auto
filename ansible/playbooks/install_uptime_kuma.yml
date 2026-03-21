@@ -9,6 +9,9 @@
     uptime_kuma_port: 3001
     uptime_kuma_user: "uptime-kuma"
     uptime_kuma_dir: "/opt/uptime-kuma"
+    # Liste des services à monitorer : [{ name: "Apache", url: "http://x.x.x.x" }, ...]
+    # Passée via --extra-vars lors de la reconfiguration depuis setup.sh
+    monitored_services: []
 
   tasks:
     - name: Mettre à jour le cache apt
@@ -118,117 +121,111 @@
       copy:
         content: |
           const io = require('socket.io-client');
-          const { exec } = require('child_process');
+          const fs = require('fs');
+          const path = require('path');
+
+          const PORT = {{ uptime_kuma_port }};
+          const SERVICES_FILE = path.join(__dirname, 'services.json');
+
+          async function loadServices() {
+            if (fs.existsSync(SERVICES_FILE)) {
+              const data = JSON.parse(fs.readFileSync(SERVICES_FILE, 'utf8'));
+              console.log(`Chargement de ${data.length} service(s) depuis services.json`);
+              return data;
+            }
+            console.log('services.json non trouvé, aucun monitor à ajouter.');
+            return [];
+          }
+
+          async function waitForKuma(maxWait = 120000) {
+            const start = Date.now();
+            while (Date.now() - start < maxWait) {
+              try {
+                await new Promise((resolve, reject) => {
+                  const s = io(`http://localhost:${PORT}`, { transports: ['websocket', 'polling'], timeout: 3000 });
+                  s.on('connect', () => { s.disconnect(); resolve(); });
+                  s.on('connect_error', reject);
+                });
+                return;
+              } catch {
+                await new Promise(r => setTimeout(r, 3000));
+              }
+            }
+            throw new Error('Uptime Kuma non disponible après ' + maxWait / 1000 + 's');
+          }
 
           async function configure() {
-            // Attendre que le service soit prêt ET que les autres services soient déployés
-            console.log('Attente du démarrage complet (60 secondes)...');
-            await new Promise(resolve => setTimeout(resolve, 60000));
-
-            console.log('Configuration automatique d\'Uptime Kuma...');
-
-            // Scanner le réseau pour trouver les services
-            const subnet = await new Promise((resolve) => {
-              exec("ip route | grep -v default | grep eth0 | awk '{print $1}'", (error, stdout) => {
-                resolve(stdout.trim());
-              });
-            });
-
-            console.log(`Scan du réseau ${subnet}...`);
-
-            // Scanner les ports 80
-            const services = await new Promise((resolve) => {
-              exec(`nmap -p 80 -oG - ${subnet} 2>/dev/null | grep "80/open" | awk '{print $2}'`,
-                (error, stdout) => {
-                  const ips = stdout.trim().split('\n').filter(ip => ip && ip !== '{{ ansible_default_ipv4.address }}');
-                  resolve(ips);
-                }
-              );
-            });
-
+            const services = await loadServices();
             if (services.length === 0) {
-              console.log('Aucun service détecté sur le réseau');
+              console.log('Aucun service à configurer.');
               return;
             }
 
-            console.log(`Services trouvés: ${services.join(', ')}`);
+            console.log('Attente du démarrage d\'Uptime Kuma...');
+            await waitForKuma();
 
-            // Se connecter à Uptime Kuma
-            const socket = io('http://localhost:{{ uptime_kuma_port }}', {
-              transports: ['websocket', 'polling']
-            });
+            const socket = io(`http://localhost:${PORT}`, { transports: ['websocket', 'polling'] });
 
-            socket.on('connect', async () => {
-              console.log('Connecté à Uptime Kuma');
+            await new Promise((resolve, reject) => {
+              socket.on('connect', () => {
+                socket.emit('setup', 'admin', 'admin123', async (res) => {
+                  if (!res.ok) {
+                    console.log('Compte admin déjà existant.');
+                  } else {
+                    console.log('Compte admin créé.');
+                  }
 
-              // Créer le compte admin
-              socket.emit('setup', 'admin', 'admin123', (res) => {
-                if (res.ok) {
-                  console.log('Compte admin créé avec succès');
-
-                  // Se connecter
                   socket.emit('login', { username: 'admin', password: 'admin123', token: '' }, async (loginRes) => {
-                    if (loginRes.ok) {
-                      console.log('Connexion réussie');
+                    if (!loginRes.ok) {
+                      return reject(new Error('Connexion échouée: ' + loginRes.msg));
+                    }
+                    console.log('Connecté à Uptime Kuma');
 
-                      // Ajouter les monitors
-                      let monitorId = 1;
-                      for (const ip of services) {
-                        // Tester si GLPI
-                        const isGlpi = await new Promise((resolve) => {
-                          exec(`curl -s -o /dev/null -w "%{http_code}" http://${ip}/glpi`,
-                            (error, stdout) => {
-                              const code = stdout.trim();
-                              resolve(code === '200' || code === '301' || code === '302');
-                            }
-                          );
-                        });
-
-                        const monitor = {
-                          type: 'http',
-                          name: isGlpi ? `GLPI (${ip})` : `Apache (${ip})`,
-                          url: isGlpi ? `http://${ip}/glpi` : `http://${ip}`,
-                          interval: 60,
-                          retryInterval: 60,
-                          maxretries: 3,
-                          active: true
-                        };
-
+                    for (const svc of services) {
+                      const monitor = {
+                        type: 'http',
+                        name: svc.name,
+                        url: svc.url,
+                        interval: 60,
+                        retryInterval: 60,
+                        maxretries: 3,
+                        active: true
+                      };
+                      await new Promise(r => {
                         socket.emit('add', monitor, (monitorRes) => {
                           if (monitorRes.ok) {
-                            console.log(`✓ Monitor ajouté: ${monitor.name}`);
+                            console.log(`✓ Monitor ajouté: ${svc.name} → ${svc.url}`);
+                          } else {
+                            console.log(`⚠ Monitor ignoré (déjà existant?): ${svc.name}`);
                           }
+                          r();
                         });
-
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-                      }
-
-                      console.log('Configuration terminée !');
-                      setTimeout(() => process.exit(0), 2000);
+                      });
+                      await new Promise(r => setTimeout(r, 800));
                     }
-                  });
-                } else {
-                  console.log('Compte admin déjà existant, tentative de connexion...');
-                  process.exit(0);
-                }
-              });
-            });
 
-            socket.on('connect_error', (error) => {
-              console.log('Erreur de connexion:', error.message);
+                    console.log('Configuration terminée.');
+                    socket.disconnect();
+                    resolve();
+                  });
+                });
+              });
+              socket.on('connect_error', reject);
             });
           }
 
-          configure().catch(console.error);
+          configure().catch(err => { console.error('Erreur:', err.message); process.exit(1); });
         dest: /opt/uptime-kuma/auto-configure.js
         mode: '0644'
 
-    - name: Installer nmap et curl pour le scan réseau
-      apt:
-        name:
-          - nmap
-          - curl
-        state: present
+    - name: Écrire services.json si des services sont fournis
+      copy:
+        content: "{{ monitored_services | to_json }}"
+        dest: /opt/uptime-kuma/services.json
+        owner: "{{ uptime_kuma_user }}"
+        group: "{{ uptime_kuma_user }}"
+        mode: '0644'
+      when: monitored_services | length > 0
 
     - name: Installer socket.io-client pour le script de configuration
       npm:
@@ -241,12 +238,10 @@
       copy:
         content: |
           #!/bin/bash
-          echo "🔄 Reconfiguration des monitors Uptime Kuma..."
-          echo ""
+          echo "Reconfiguration des monitors Uptime Kuma..."
           cd /opt/uptime-kuma
-          sudo -u uptime-kuma node /opt/uptime-kuma/auto-configure.js
-          echo ""
-          echo "✅ Terminé ! Consultez le log : /opt/uptime-kuma/configure.log"
+          sudo -u uptime-kuma node /opt/uptime-kuma/auto-configure.js 2>&1 | tee /opt/uptime-kuma/configure.log
+          echo "Terminé. Log : /opt/uptime-kuma/configure.log"
         dest: /usr/local/bin/reconfigure-uptime-kuma
         mode: '0755'
 

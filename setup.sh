@@ -625,6 +625,89 @@ print_service_urls() {
   echo ""
 }
 
+configure_uptime_kuma_monitors() {
+  if [[ "$DEPLOY_UPTIME" != "1" ]]; then
+    return 0
+  fi
+
+  local ip_uptime
+  pushd terraform >/dev/null
+  ip_uptime="$(resolve_container_ip "$UPTIME_NAME")"
+  popd >/dev/null
+
+  if [[ -z "$ip_uptime" ]]; then
+    log_warn "IP Uptime Kuma non trouvée, configuration monitors ignorée."
+    return 0
+  fi
+
+  # Construire la liste JSON des services à monitorer
+  local services="["
+  local first=1
+
+  if [[ "$DEPLOY_APACHE" == "1" ]]; then
+    local ip_web
+    pushd terraform >/dev/null
+    ip_web="$(resolve_container_ip "$WEB_NAME")"
+    popd >/dev/null
+    if [[ -n "$ip_web" ]]; then
+      [[ $first -eq 0 ]] && services+=","
+      services+="{\"name\":\"Apache (${VM_PREFIX}-${WEB_NAME})\",\"url\":\"http://${ip_web}\"}"
+      first=0
+    fi
+  fi
+
+  if [[ "$DEPLOY_GLPI" == "1" ]]; then
+    local ip_glpi
+    pushd terraform >/dev/null
+    ip_glpi="$(resolve_container_ip "$GLPI_NAME")"
+    popd >/dev/null
+    if [[ -n "$ip_glpi" ]]; then
+      [[ $first -eq 0 ]] && services+=","
+      services+="{\"name\":\"GLPI (${VM_PREFIX}-${GLPI_NAME})\",\"url\":\"http://${ip_glpi}/glpi\"}"
+      first=0
+    fi
+  fi
+
+  if [[ "$DEPLOY_WSERV" == "1" && -n "${WSERV_RESOLVED_IP:-}" ]]; then
+    [[ $first -eq 0 ]] && services+=","
+    services+="{\"name\":\"Windows Server (${VM_PREFIX}-${WSERV_NAME})\",\"url\":\"http://${WSERV_RESOLVED_IP}\"}"
+    first=0
+  fi
+
+  services+="]"
+
+  if [[ $first -eq 1 ]]; then
+    log_warn "Aucune IP de service disponible pour Uptime Kuma."
+    return 0
+  fi
+
+  log_title "Configuration des monitors Uptime Kuma"
+  log_info "Services détectés: $services"
+
+  local ssh_key="$SCRIPT_DIR/ssh/id_ed25519_terraform"
+  [[ ! -f "$ssh_key" ]] && ssh_key="$HOME/.ssh/id_ed25519"
+  [[ ! -f "$ssh_key" ]] && ssh_key="$HOME/.ssh/id_rsa"
+
+  if [[ ! -f "$ssh_key" ]]; then
+    log_warn "Clé SSH introuvable, configuration monitors ignorée."
+    return 0
+  fi
+
+  # Écrire services.json sur le container Uptime Kuma
+  echo "$services" | ssh -i "$ssh_key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    root@"$ip_uptime" "cat > /opt/uptime-kuma/services.json && chown uptime-kuma:uptime-kuma /opt/uptime-kuma/services.json" 2>/dev/null || {
+    log_warn "Impossible d'écrire services.json sur le container Uptime Kuma."
+    return 0
+  }
+
+  # Déclencher la reconfiguration
+  ssh -i "$ssh_key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    root@"$ip_uptime" \
+    "nohup sudo -u uptime-kuma node /opt/uptime-kuma/auto-configure.js > /opt/uptime-kuma/configure.log 2>&1 &" 2>/dev/null || true
+
+  log_ok "Configuration monitors Uptime Kuma déclenchée (log: /opt/uptime-kuma/configure.log)"
+}
+
 provision_windows_after_apply() {
   if [[ "$DEPLOY_WSERV" != "1" ]]; then
     return 0
@@ -726,6 +809,7 @@ main() {
 
   if run_terraform; then
     provision_windows_after_apply
+    configure_uptime_kuma_monitors
     log_ok "Deployment complete."
     print_service_urls
   else
