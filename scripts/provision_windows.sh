@@ -65,7 +65,7 @@ ANSIBLE_FORCE_COLOR=1 ANSIBLE_CONFIG="$ANSIBLE_CONFIG" ansible-playbook \
   "$PLAYBOOK" \
   -e "ansible_connection=winrm" \
   -e "ansible_port=5985" \
-  -e "ansible_winrm_transport=ntlm" \
+  -e "ansible_winrm_transport=basic" \
   -e "ansible_winrm_server_cert_validation=ignore" \
   -e "ansible_user=${WIN_USER}" \
   -e "ansible_password=${WIN_PASSWORD}" \

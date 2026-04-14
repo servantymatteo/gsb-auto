@@ -1,7 +1,7 @@
 ---
 - name: Configurer Windows Server (WinRM + IIS + AD DS)
   hosts: all
-  gather_facts: no
+  gather_facts: false
 
   vars:
     ad_domain_name: "{{ ad_domain_name | default('gsb.local') }}"
@@ -19,6 +19,7 @@
           winrm quickconfig -q
           Set-Item -Path WSMan:\localhost\Service\AllowUnencrypted -Value $true
           Set-Item -Path WSMan:\localhost\Service\Auth\Basic -Value $true
+          Set-Item -Path WSMan:\localhost\MaxEnvelopeSizekb -Value 8192
           netsh advfirewall firewall add rule name="WinRM 5985" dir=in action=allow protocol=TCP localport=5985 | Out-Null
 
     - name: Attendre reconnexion WinRM après reconfig
