@@ -886,12 +886,21 @@ configure_uptime_kuma() {
 
   monitors+="]"
 
-  run_step "Configuration monitors Uptime Kuma..." \
-    python3 ./scripts/configure_kuma.py \
-      "http://${kuma_ip}:3001" \
-      "$KUMA_ADMIN_USER" \
-      "$KUMA_ADMIN_PASSWORD" \
-      "$monitors"
+  if [[ "$monitors" == "[]" ]]; then
+    log_warn "Aucun service avec une IP trouvée, monitors ignorés."
+    return 0
+  fi
+
+  log_info "Monitors à ajouter: $(echo "$monitors" | python3 -c "import sys,json; [print('    · '+m['name']) for m in json.load(sys.stdin)]" 2>/dev/null || echo "$monitors")"
+
+  log_info "Connexion à Uptime Kuma (http://${kuma_ip}:3001)..."
+  python3 ./scripts/configure_kuma.py \
+    "http://${kuma_ip}:3001" \
+    "$KUMA_ADMIN_USER" \
+    "$KUMA_ADMIN_PASSWORD" \
+    "$monitors" \
+    && log_ok "Monitors configurés" \
+    || log_warn "Configuration Kuma échouée (monitors à ajouter manuellement)"
 }
 
 main() {
