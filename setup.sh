@@ -827,7 +827,7 @@ configure_uptime_kuma() {
   fi
   if ! python3 -c "import uptime_kuma_api" 2>/dev/null; then
     run_step "Installation uptime-kuma-api..." \
-      bash -c 'pip3 install --quiet uptime-kuma-api 2>/dev/null || pip install --quiet uptime-kuma-api'
+      bash -c 'pip3 install --quiet --break-system-packages uptime-kuma-api'
   fi
 
   # Attendre que Kuma soit joignable
