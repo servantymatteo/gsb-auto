@@ -321,7 +321,7 @@ prompt_with_default() {
 
 prompt_deployment_plan_if_interactive() {
   if [[ ! -t 0 ]]; then
-    return 0
+    exec < /dev/tty
   fi
 
   log_title "Plan de déploiement"
