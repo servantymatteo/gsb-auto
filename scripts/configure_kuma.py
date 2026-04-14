@@ -30,7 +30,7 @@ def main():
     kuma_pass = sys.argv[3]
     monitors  = json.loads(sys.argv[4])
 
-    api = UptimeKumaApi(kuma_url, wait_events=5, timeout=60)
+    api = UptimeKumaApi(kuma_url, wait_events=5, timeout=120)
 
     # Création du compte admin ou connexion
     try:
@@ -85,9 +85,20 @@ def main():
                 )
             print(f"  + {name}")
             added += 1
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"  ! {name}: {e}", file=sys.stderr)
+        except Exception:
+            # Timeout possible même si le monitor est créé côté serveur.
+            # On vérifie en relisant la liste.
+            time.sleep(2)
+            try:
+                current = {m["name"] for m in api.get_monitors()}
+                if name in current:
+                    print(f"  + {name} (créé malgré timeout)")
+                    added += 1
+                else:
+                    print(f"  ! {name}: échec", file=sys.stderr)
+            except Exception:
+                print(f"  ! {name}: échec (vérification impossible)", file=sys.stderr)
+        time.sleep(1)
 
     api.disconnect()
     print(f"  → {added} monitor(s) ajouté(s) sur {len(monitors)} attendu(s).")
