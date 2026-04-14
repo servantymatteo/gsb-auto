@@ -103,7 +103,7 @@ main() {
   fi
 
   run_step "Mise à jour des paquets..." apt-get update -qq
-  run_step "Installation curl & tar..." apt-get install -y curl tar
+  run_step "Installation curl, tar, python3-pip..." apt-get install -y curl tar python3-pip
 
   install_terraform
   install_ansible

@@ -99,6 +99,9 @@ PROXMOX_USER="${PROXMOX_USER:-root@pam}"
 PROXMOX_PASSWORD="${PROXMOX_PASSWORD:-}"
 PROXMOX_AUTH_PREFERENCE="${PROXMOX_AUTH_PREFERENCE:-token}"
 
+KUMA_ADMIN_USER="${KUMA_ADMIN_USER:-admin}"
+KUMA_ADMIN_PASSWORD="${KUMA_ADMIN_PASSWORD:-Formation13@}"
+
 DEPLOY_APACHE="${DEPLOY_APACHE:-1}"
 DEPLOY_GLPI="${DEPLOY_GLPI:-1}"
 DEPLOY_UPTIME="${DEPLOY_UPTIME:-1}"
@@ -735,7 +738,7 @@ print_service_urls() {
     echo "  IP        : ${ip_uptime:-non trouvée}"
     echo "  Port      : 3001"
     [[ -n "$ip_uptime" ]] && echo "  URL       : http://${ip_uptime}:3001"
-    echo "  Login     : création au premier accès"
+    echo "  Login     : ${KUMA_ADMIN_USER} / ${KUMA_ADMIN_PASSWORD}"
   fi
 
   if [[ "$DEPLOY_WSERV" == "1" ]]; then
@@ -802,6 +805,93 @@ provision_windows_after_apply() {
   else
     log_warn "scripts/provision_windows.sh introuvable."
   fi
+}
+
+configure_uptime_kuma() {
+  [[ "$DEPLOY_UPTIME" != "1" ]] && return 0
+
+  local kuma_ip
+  pushd terraform >/dev/null
+  kuma_ip="$(resolve_container_ip "$UPTIME_NAME")"
+  popd >/dev/null
+
+  if [[ -z "$kuma_ip" ]]; then
+    log_warn "IP Uptime Kuma introuvable, configuration ignorée."
+    return 0
+  fi
+
+  # Vérifier python3 et uptime-kuma-api
+  if ! command -v python3 >/dev/null 2>&1; then
+    log_warn "python3 non disponible, configuration Kuma ignorée."
+    return 0
+  fi
+  if ! python3 -c "import uptime_kuma_api" 2>/dev/null; then
+    run_step "Installation uptime-kuma-api..." \
+      bash -c 'pip3 install --quiet uptime-kuma-api 2>/dev/null || pip install --quiet uptime-kuma-api'
+  fi
+
+  # Attendre que Kuma soit joignable
+  start_spinner "Attente Uptime Kuma (${kuma_ip}:3001)..."
+  local ready=0
+  for i in $(seq 1 24); do
+    if (echo > /dev/tcp/"$kuma_ip"/3001) >/dev/null 2>&1; then
+      ready=1; break
+    fi
+    sleep 5
+  done
+  if [[ "$ready" == "0" ]]; then
+    stop_spinner 1
+    log_warn "Kuma inaccessible, configuration ignorée."
+    return 0
+  fi
+  stop_spinner 0
+
+  # Construire la liste de monitors en JSON
+  local monitors="["
+  local sep=""
+
+  pushd terraform >/dev/null
+
+  if [[ "$DEPLOY_APACHE" == "1" ]]; then
+    local ip_web; ip_web="$(resolve_container_ip "$WEB_NAME")"
+    if [[ -n "$ip_web" ]]; then
+      monitors+="${sep}{\"name\":\"Apache — ${VM_PREFIX}-${WEB_NAME}\",\"type\":\"http\",\"url\":\"http://${ip_web}\"}"
+      sep=","
+    fi
+  fi
+
+  if [[ "$DEPLOY_GLPI" == "1" ]]; then
+    local ip_glpi; ip_glpi="$(resolve_container_ip "$GLPI_NAME")"
+    if [[ -n "$ip_glpi" ]]; then
+      monitors+="${sep}{\"name\":\"GLPI — ${VM_PREFIX}-${GLPI_NAME}\",\"type\":\"http\",\"url\":\"http://${ip_glpi}/glpi\"}"
+      sep=","
+    fi
+  fi
+
+  if [[ "$DEPLOY_AD" == "1" ]]; then
+    local ip_dc; ip_dc="$(resolve_container_ip "$AD_DC_NAME")"
+    if [[ -n "$ip_dc" ]]; then
+      monitors+="${sep}{\"name\":\"Samba AD — ${VM_PREFIX}-${AD_DC_NAME}\",\"type\":\"tcp\",\"hostname\":\"${ip_dc}\",\"port\":389}"
+      sep=","
+    fi
+  fi
+
+  if [[ "$DEPLOY_WSERV" == "1" && -n "${WSERV_RESOLVED_IP:-}" ]]; then
+    monitors+="${sep}{\"name\":\"Windows IIS — ${VM_PREFIX}-${WSERV_NAME}\",\"type\":\"http\",\"url\":\"http://${WSERV_RESOLVED_IP}\"}"
+    sep=","
+    monitors+="${sep}{\"name\":\"Windows WinRM — ${VM_PREFIX}-${WSERV_NAME}\",\"type\":\"tcp\",\"hostname\":\"${WSERV_RESOLVED_IP}\",\"port\":5985}"
+  fi
+
+  popd >/dev/null
+
+  monitors+="]"
+
+  run_step "Configuration monitors Uptime Kuma..." \
+    python3 ./scripts/configure_kuma.py \
+      "http://${kuma_ip}:3001" \
+      "$KUMA_ADMIN_USER" \
+      "$KUMA_ADMIN_PASSWORD" \
+      "$monitors"
 }
 
 main() {
@@ -888,6 +978,12 @@ main() {
   if [[ "$DEPLOY_WSERV" == "1" ]]; then
     log_title "6 · Provisionnement Windows"
     provision_windows_after_apply
+  fi
+
+  # ── Étape 7 : Configuration Uptime Kuma ─────────────────────────────────
+  if [[ "$DEPLOY_UPTIME" == "1" ]]; then
+    log_title "7 · Configuration Uptime Kuma"
+    configure_uptime_kuma
   fi
 
   # ── Résumé ───────────────────────────────────────────────────────────────
