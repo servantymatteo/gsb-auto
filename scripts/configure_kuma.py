@@ -30,7 +30,7 @@ def main():
     kuma_pass = sys.argv[3]
     monitors  = json.loads(sys.argv[4])
 
-    api = UptimeKumaApi(kuma_url, wait_events=3, timeout=30)
+    api = UptimeKumaApi(kuma_url, wait_events=5, timeout=60)
 
     # Création du compte admin ou connexion
     try:
@@ -45,11 +45,13 @@ def main():
             api.disconnect()
             sys.exit(1)
 
+    # Laisser Kuma envoyer tous ses événements initiaux
+    time.sleep(3)
+
     # Monitors existants
     try:
         existing = {m["name"] for m in api.get_monitors()}
-    except Exception as e:
-        print(f"  ! get_monitors: {e}", file=sys.stderr)
+    except Exception:
         existing = set()
 
     added = 0
