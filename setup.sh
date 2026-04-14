@@ -11,13 +11,70 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
-log_title() { echo -e "\n${BOLD}${CYAN}== $* ==${NC}"; }
-log_info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
-log_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_err()   { echo -e "${RED}[ERROR]${NC} $*"; }
+LOG_FILE="/tmp/gsb-auto-$$.log"
+_SPINNER_PID=""
+_SPINNER_MSG=""
+
+log_title() {
+  echo ""
+  echo -e "${BOLD}${CYAN}┌─ $* ${NC}"
+}
+log_ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
+log_warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
+log_err()  { echo -e "  ${RED}✗${NC} $*"; }
+log_info() { echo -e "  ${DIM}→${NC} $*"; }
+
+_spinner_loop() {
+  local msg="$1"
+  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local i=0
+  while true; do
+    printf "\r  \033[0;36m${frames[$i]}\033[0m %s" "$msg"
+    i=$(( (i + 1) % 10 ))
+    sleep 0.08
+  done
+}
+
+start_spinner() {
+  _SPINNER_MSG="$1"
+  _spinner_loop "$1" &
+  _SPINNER_PID=$!
+  disown "$_SPINNER_PID" 2>/dev/null || true
+}
+
+stop_spinner() {
+  local status="${1:-0}"
+  if [[ -n "$_SPINNER_PID" ]]; then
+    kill "$_SPINNER_PID" 2>/dev/null || true
+    _SPINNER_PID=""
+    printf "\r\033[K"
+  fi
+  if [[ "$status" == "0" ]]; then
+    echo -e "  ${GREEN}✓${NC} ${_SPINNER_MSG}"
+  else
+    echo -e "  ${RED}✗${NC} ${_SPINNER_MSG}"
+    if [[ -s "$LOG_FILE" ]]; then
+      echo -e "  ${DIM}--- dernières lignes du log ---${NC}"
+      tail -15 "$LOG_FILE" | grep -v '^$' | sed 's/^/    /'
+      echo -e "  ${DIM}--- log complet: ${LOG_FILE} ---${NC}"
+    fi
+  fi
+}
+
+run_step() {
+  local msg="$1"; shift
+  start_spinner "$msg"
+  if "$@" >>"$LOG_FILE" 2>&1; then
+    stop_spinner 0
+    return 0
+  else
+    stop_spinner 1
+    return 1
+  fi
+}
 
 prompt_password_if_missing() {
   if [[ -z "${PROXMOX_PASSWORD:-}" || "${PROXMOX_PASSWORD}" == "ton_mdp" ]]; then
@@ -95,6 +152,10 @@ need_cmd() {
     log_err "Command not found: $1"
     exit 1
   }
+}
+
+detect_or_create_ssh_key_silent() {
+  detect_or_create_ssh_key >/dev/null 2>&1
 }
 
 detect_or_create_ssh_key() {
@@ -606,23 +667,25 @@ EOF
 }
 
 run_terraform() {
-  # Empêche les variables d'environnement Proxmox de surcharger le mode d'auth choisi.
   unset PM_API_TOKEN_ID PM_API_TOKEN_SECRET PM_USER PM_PASS PM_PASSWORD
   unset PROXMOX_VE_API_TOKEN PROXMOX_VE_USERNAME PROXMOX_VE_PASSWORD PROXMOX_VE_AUTH_TICKET PROXMOX_VE_CSRF_PREVENTION_TOKEN
 
   pushd terraform >/dev/null
-  log_title "Terraform Init"
-  TF_IN_AUTOMATION=1 terraform init -input=false -compact-warnings
+
+  run_step "Initialisation Terraform..." \
+    bash -c 'TF_IN_AUTOMATION=1 terraform init -input=false -compact-warnings'
 
   local attempt
   for attempt in $(seq 1 "$MAX_APPLY_ATTEMPTS"); do
-    log_title "Terraform Apply ${attempt}/${MAX_APPLY_ATTEMPTS}"
-    if TF_IN_AUTOMATION=1 terraform apply --auto-approve -compact-warnings; then
+    local msg="Déploiement infrastructure"
+    [[ "$MAX_APPLY_ATTEMPTS" -gt 1 ]] && msg+=" (tentative ${attempt}/${MAX_APPLY_ATTEMPTS})"
+    if run_step "$msg..." \
+        bash -c 'TF_IN_AUTOMATION=1 terraform apply --auto-approve -compact-warnings'; then
       popd >/dev/null
       return 0
     fi
     if [[ "$attempt" -lt "$MAX_APPLY_ATTEMPTS" ]]; then
-      log_warn "Apply failed, retry in 8s..."
+      log_warn "Échec, nouvelle tentative dans 8s..."
       sleep 8
     fi
   done
@@ -714,106 +777,121 @@ provision_windows_after_apply() {
 
   if [[ $EUID -eq 0 ]] && command -v qm >/dev/null 2>&1; then
     if qm status "$WSERV_VM_ID" 2>/dev/null | grep -q "stopped"; then
-      log_warn "VM Windows ${WSERV_VM_ID} arrêtée après apply, démarrage forcé..."
-      qm start "$WSERV_VM_ID" || true
+      run_step "Démarrage VM Windows ${WSERV_VM_ID}..." bash -c "qm start ${WSERV_VM_ID}" || true
       sleep 5
     fi
   fi
 
   local wip="${WSERV_RESOLVED_IP:-}"
   if [[ -z "$wip" ]]; then
-    if ! wait_for_windows_ip; then
-      log_warn "IP Windows non trouvée, provisioning Windows ignoré."
+    run_step "Détection IP Windows..." wait_for_windows_ip || {
+      log_warn "IP Windows non trouvée, provisioning ignoré."
       return 0
-    fi
+    }
     wip="${WSERV_RESOLVED_IP:-}"
   fi
+  log_ok "IP Windows: ${wip}"
 
-  log_ok "IP Windows détectée: $wip"
-
-  log_title "Provisionnement Windows"
   if [[ -x "./scripts/provision_windows.sh" ]]; then
-    ./scripts/provision_windows.sh "${VM_PREFIX}-${WSERV_NAME}" "$wip" "./ansible/playbooks/install_wserv.yml" "$WSERV_ADMIN_USER" "$WSERV_ADMIN_PASSWORD" "$WINDOWS_DOMAIN_NAME" "$WINDOWS_DOMAIN_NETBIOS" "$WINDOWS_SAFE_MODE_PASSWORD" "$AD_OU_LIST" "$AD_GROUP_LIST" "$AD_USER_LIST" "$AD_DEFAULT_USER_PASSWORD" || \
-      log_warn "Provisioning Windows échoué (WinRM indisponible ou credentials invalides)."
+    ./scripts/provision_windows.sh "${VM_PREFIX}-${WSERV_NAME}" "$wip" \
+      "./ansible/playbooks/install_wserv.yml" \
+      "$WSERV_ADMIN_USER" "$WSERV_ADMIN_PASSWORD" \
+      "$WINDOWS_DOMAIN_NAME" "$WINDOWS_DOMAIN_NETBIOS" "$WINDOWS_SAFE_MODE_PASSWORD" \
+      "$AD_OU_LIST" "$AD_GROUP_LIST" "$AD_USER_LIST" "$AD_DEFAULT_USER_PASSWORD" || \
+      log_warn "Provisioning Windows échoué (voir log: ${LOG_FILE})."
   else
-    log_warn "scripts/provision_windows.sh introuvable/exécutable."
+    log_warn "scripts/provision_windows.sh introuvable."
   fi
 }
 
 main() {
   trap cleanup EXIT
 
-  log_title "Préparation"
+  echo ""
+  echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${NC}"
+  echo -e "${BOLD}${CYAN}║        GSB Auto — Déploiement            ║${NC}"
+  echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${NC}"
+
+  # ── Étape 1 : Vérification des dépendances ──────────────────────────────
+  log_title "1 · Vérification"
   need_cmd terraform
   need_cmd curl
   need_cmd ssh-keygen
+  log_ok "Dépendances OK"
 
+  run_step "Clé SSH..." detect_or_create_ssh_key_silent
   SSH_PUB_KEY="$(detect_or_create_ssh_key)"
-  log_ok "SSH public key ready."
 
+  # ── Étape 2 : Plan de déploiement ───────────────────────────────────────
+  log_title "2 · Configuration"
   prompt_deployment_plan_if_interactive
   validate_windows_plan
-  if [[ "$DEPLOY_WSERV" == "1" ]]; then
-    log_info "wSERV sélectionné."
-  fi
 
-  log_title "Validation Auth Proxmox"
+  local services_list=""
+  [[ "$DEPLOY_APACHE" == "1" ]] && services_list+="Apache "
+  [[ "$DEPLOY_GLPI"   == "1" ]] && services_list+="GLPI "
+  [[ "$DEPLOY_UPTIME" == "1" ]] && services_list+="Uptime "
+  [[ "$DEPLOY_WSERV"  == "1" ]] && services_list+="Windows "
+  [[ "$DEPLOY_AD"     == "1" ]] && services_list+="SambaAD "
+  log_ok "Services sélectionnés: ${services_list:-aucun}"
+
+  # ── Étape 3 : Auth Proxmox ───────────────────────────────────────────────
+  log_title "3 · Authentification Proxmox"
+
   if [[ "$PROXMOX_AUTH_PREFERENCE" == "token" ]]; then
-    log_info "Authentification préférée: API token"
     if [[ -z "$PROXMOX_TOKEN_ID" || -z "$PROXMOX_TOKEN_SECRET" ]]; then
-      log_info "Creating Proxmox token automatically..."
-      if setup_token_when_possible; then
-        log_ok "Token created: ${PROXMOX_TOKEN_ID}"
-      else
-        log_warn "Token auto-creation unavailable, fallback to password."
-      fi
+      run_step "Création token API..." setup_token_when_possible || \
+        log_warn "Création automatique impossible, fallback mot de passe."
     fi
-
-    if [[ -n "$PROXMOX_TOKEN_ID" && -n "$PROXMOX_TOKEN_SECRET" ]] && token_has_provider_level_access && token_has_vm_monitor_access; then
+    if [[ -n "$PROXMOX_TOKEN_ID" && -n "$PROXMOX_TOKEN_SECRET" ]] && \
+       token_has_provider_level_access && token_has_vm_monitor_access; then
       AUTH_MODE_SELECTED="token"
-      log_ok "Token auth validated with VM.Monitor access."
+      log_ok "Token API validé"
     else
-      log_warn "Token auth invalid ou permissions insuffisantes."
+      log_warn "Token invalide ou permissions insuffisantes."
     fi
   fi
 
   if [[ -z "$AUTH_MODE_SELECTED" ]]; then
-    # Fallback password uniquement si explicitement fourni (pas d'invite interactive).
     if [[ -n "${PROXMOX_PASSWORD:-}" && "${PROXMOX_PASSWORD}" != "ton_mdp" ]]; then
       if [[ $EUID -eq 0 ]] && command -v pveum >/dev/null 2>&1; then
-        pveum aclmod / -user "$PROXMOX_USER" -role Administrator >/dev/null 2>&1 || true
+        pveum aclmod / -user "$PROXMOX_USER" -role Administrator >>"$LOG_FILE" 2>&1 || true
       fi
       if password_has_provider_level_access && password_has_vm_monitor_access; then
         AUTH_MODE_SELECTED="password"
         PROXMOX_TOKEN_ID=""
         PROXMOX_TOKEN_SECRET=""
-        log_ok "Password auth validated with VM.Monitor access."
+        log_ok "Authentification par mot de passe validée"
       fi
     fi
 
     if [[ -z "$AUTH_MODE_SELECTED" ]]; then
-      log_err "Authentification Proxmox impossible sans prompt. Fournis un token valide, ou PROXMOX_PASSWORD en variable d'environnement."
+      log_err "Authentification Proxmox impossible. Fournis un token valide ou PROXMOX_PASSWORD."
       exit 1
     fi
   fi
 
-  log_title "Génération Config"
+  # ── Étape 4 : Génération de la config ───────────────────────────────────
+  log_title "4 · Génération config"
   write_env_file
   write_tfvars
-  if [[ "$AUTH_MODE_SELECTED" == "password" ]]; then
-    log_info "Auth Terraform: password (${PROXMOX_USER})"
-  else
-    log_info "Auth Terraform: token (${PROXMOX_TOKEN_ID})"
-  fi
+  log_ok "Config générée (auth: ${AUTH_MODE_SELECTED})"
 
-  if run_terraform; then
-    provision_windows_after_apply
-    log_ok "Deployment complete."
-    print_service_urls
-  else
-    log_err "terraform apply failed after ${MAX_APPLY_ATTEMPTS} attempts."
+  # ── Étape 5 : Terraform ──────────────────────────────────────────────────
+  log_title "5 · Infrastructure"
+  if ! run_terraform; then
+    log_err "Échec du déploiement après ${MAX_APPLY_ATTEMPTS} tentative(s)."
     exit 1
   fi
+
+  # ── Étape 6 : Provisionnement Windows ───────────────────────────────────
+  if [[ "$DEPLOY_WSERV" == "1" ]]; then
+    log_title "6 · Provisionnement Windows"
+    provision_windows_after_apply
+  fi
+
+  # ── Résumé ───────────────────────────────────────────────────────────────
+  print_service_urls
 }
 
 main "$@"
