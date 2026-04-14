@@ -54,6 +54,12 @@ CI_PASSWORD=Formation13@
 
 ## Utilisation rapide
 
+### Méthode one-liner (depuis n'importe quelle machine)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/servantymatteo/gsb-auto/main/install.sh | bash
+```
+
 ### Méthode 0 : Déploiement one-shot (non interactif)
 
 ```bash
