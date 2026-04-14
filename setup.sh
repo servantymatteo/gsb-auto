@@ -319,6 +319,49 @@ prompt_with_default() {
   fi
 }
 
+apply_preset_company_structure() {
+  AD_OU_LIST="Direction,IT,RH,Comptabilite,Commercial"
+  AD_GROUP_LIST="GSB-Direction,GSB-IT,GSB-RH,GSB-Comptabilite,GSB-Commercial,GSB-Admins"
+  AD_USER_LIST="dir.general,admin.sys,technicien,responsable.rh,gestionnaire.rh,comptable,commercial1,commercial2"
+  log_ok "Structure prédéfinie appliquée :"
+  echo -e "  ${CYAN}OUs    :${NC} ${AD_OU_LIST}"
+  echo -e "  ${CYAN}Groupes:${NC} ${AD_GROUP_LIST}"
+  echo -e "  ${CYAN}Users  :${NC} ${AD_USER_LIST}"
+  echo -e "  ${CYAN}MDP    :${NC} ${AD_DEFAULT_USER_PASSWORD}"
+}
+
+prompt_ad_structure() {
+  echo ""
+  echo -e "${CYAN}Structure Active Directory :${NC}"
+  echo "  [1] Aucune (AD vide)"
+  echo "  [2] Structure d'entreprise prédéfinie"
+  echo "       OUs     : Direction, IT, RH, Comptabilite, Commercial"
+  echo "       Groupes : GSB-Direction, GSB-IT, GSB-RH, GSB-Comptabilite, GSB-Commercial, GSB-Admins"
+  echo "       Users   : dir.general, admin.sys, technicien, responsable.rh, gestionnaire.rh, comptable, commercial1, commercial2"
+  echo "  [3] Personnalisé (saisir manuellement)"
+  local ad_choice=""
+  read -r -p "Choix [1]: " ad_choice
+  ad_choice="${ad_choice:-1}"
+
+  case "$ad_choice" in
+    2)
+      apply_preset_company_structure
+      prompt_with_default AD_DEFAULT_USER_PASSWORD "Mot de passe utilisateurs AD" "$AD_DEFAULT_USER_PASSWORD"
+      ;;
+    3)
+      prompt_with_default AD_OU_LIST "Liste OU (CSV, ex: IT,RH)" "$AD_OU_LIST"
+      prompt_with_default AD_GROUP_LIST "Liste groupes AD (CSV, ex: GSB-Admins,GSB-Users)" "$AD_GROUP_LIST"
+      prompt_with_default AD_USER_LIST "Liste users AD (CSV, ex: alice,bob,carol)" "$AD_USER_LIST"
+      prompt_with_default AD_DEFAULT_USER_PASSWORD "Mot de passe utilisateurs AD" "$AD_DEFAULT_USER_PASSWORD"
+      ;;
+    *)
+      AD_OU_LIST=""
+      AD_GROUP_LIST=""
+      AD_USER_LIST=""
+      ;;
+  esac
+}
+
 prompt_deployment_plan_if_interactive() {
   if [[ ! -t 0 ]]; then
     exec < /dev/tty
@@ -365,16 +408,12 @@ prompt_deployment_plan_if_interactive() {
     log_info "Configuration Windows Server"
     prompt_with_default WINDOWS_TEMPLATE_VMID "VMID template Windows à cloner" "$WINDOWS_TEMPLATE_VMID"
     prompt_with_default WSERV_VM_ID "VMID cible de la VM Windows (nouvelle VM)" "$WSERV_VM_ID"
-    if [[ -t 0 ]]; then
-      local create_ad_objects="N"
-      read -r -p "Créer des OU/groupes/utilisateurs AD ? (o/N): " create_ad_objects
-      if [[ "$create_ad_objects" == "o" || "$create_ad_objects" == "O" ]]; then
-        prompt_with_default AD_OU_LIST "Liste OU (CSV, ex: IT,RH)" "$AD_OU_LIST"
-        prompt_with_default AD_GROUP_LIST "Liste groupes AD (CSV, ex: GSB-Admins,GSB-Users)" "$AD_GROUP_LIST"
-        prompt_with_default AD_USER_LIST "Liste users AD (CSV, ex: alice,bob,carol)" "$AD_USER_LIST"
-        prompt_with_default AD_DEFAULT_USER_PASSWORD "Mot de passe users AD" "$AD_DEFAULT_USER_PASSWORD"
-      fi
-    fi
+    prompt_ad_structure
+  fi
+
+  if [[ "$DEPLOY_AD" == "1" ]]; then
+    log_info "Configuration Active Directory (Samba DC)"
+    prompt_ad_structure
   fi
 
   if [[ "$use_defaults" == "n" || "$use_defaults" == "N" ]]; then
@@ -419,7 +458,7 @@ prompt_deployment_plan_if_interactive() {
       fi
     fi
     if [[ "$DEPLOY_AD" == "1" ]]; then
-      log_info "Configuration Active Directory (Samba DC)"
+      log_info "Ressources Active Directory (Samba DC)"
       prompt_with_default AD_DC_NAME "Nom container DC" "$AD_DC_NAME"
       prompt_with_default AD_DC_CORES "CPU DC" "$AD_DC_CORES"
       prompt_with_default AD_DC_MEMORY "RAM DC (MB)" "$AD_DC_MEMORY"
