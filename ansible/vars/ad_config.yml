@@ -1,0 +1,145 @@
+---
+# ============================================================
+# CONFIGURATION ACTIVE DIRECTORY - Samba 4 DC
+# Modifiez ce fichier pour adapter le domaine et les OUs/GPOs
+# ============================================================
+
+# --- Domaine ---
+ad_realm: "GSB.LAN"           # Realm Kerberos (majuscules)
+ad_domain_short: "GSB"        # Nom NetBIOS du domaine
+ad_admin_password: "Admin@GSB2024!"   # Mot de passe administrateur du domaine
+ad_base_dn: "DC=gsb,DC=lan"   # Base DN LDAP
+
+# --- Unités d'Organisation ---
+# IMPORTANT : ordonner du parent vers l'enfant
+organizational_units:
+  - dn: "OU=Utilisateurs,DC=gsb,DC=lan"
+  - dn: "OU=Informatique,OU=Utilisateurs,DC=gsb,DC=lan"
+  - dn: "OU=RH,OU=Utilisateurs,DC=gsb,DC=lan"
+  - dn: "OU=Direction,OU=Utilisateurs,DC=gsb,DC=lan"
+  - dn: "OU=Ordinateurs,DC=gsb,DC=lan"
+  - dn: "OU=Portables,OU=Ordinateurs,DC=gsb,DC=lan"
+  - dn: "OU=Fixes,OU=Ordinateurs,DC=gsb,DC=lan"
+  - dn: "OU=Serveurs,DC=gsb,DC=lan"
+  - dn: "OU=Groupes,DC=gsb,DC=lan"
+
+# --- Groupes de sécurité ---
+ad_groups:
+  - name: "GRP_Informatique"
+    ou: "OU=Groupes,DC=gsb,DC=lan"
+    description: "Membres du service informatique"
+  - name: "GRP_RH"
+    ou: "OU=Groupes,DC=gsb,DC=lan"
+    description: "Membres du service RH"
+  - name: "GRP_Direction"
+    ou: "OU=Groupes,DC=gsb,DC=lan"
+    description: "Membres de la direction"
+
+# --- GPOs ---
+# Chaque GPO peut avoir :
+#   name        : nom affiché dans l'AD
+#   description : description (optionnel)
+#   link_to     : liste d'OUs cibles (chaîne vide = base DC)
+#   security    : liste de paramètres de sécurité (clé/valeur)
+#
+# Clés security supportées (samba-tool gpo manage security) :
+#   MinimumPasswordLength     : longueur min du mot de passe
+#   PasswordComplexity        : 1=activé, 0=désactivé
+#   MaximumPasswordAge        : durée max en jours (0=illimité)
+#   MinimumPasswordAge        : durée min en jours
+#   PasswordHistorySize       : historique des mots de passe
+#   LockoutBadCount           : tentatives avant verrouillage (0=désactivé)
+#   LockoutDuration           : durée verr. en minutes (0=manuel)
+#   ResetLockoutCount         : délai reset compteur en minutes
+#   EnableGuestAccount        : 1=activé, 0=désactivé
+#   RequireLogonToChangePassword : 1=oui, 0=non
+
+gpos:
+
+  # --- Sécurité globale ---
+  - name: "Politique-Mots-de-passe"
+    description: "Complexite et duree de vie des mots de passe"
+    link_to:
+      - ""   # Base DC → appliqué à tout le domaine
+    security:
+      - { key: "MinimumPasswordLength",  value: "10" }
+      - { key: "PasswordComplexity",     value: "1"  }
+      - { key: "MaximumPasswordAge",     value: "90" }
+      - { key: "MinimumPasswordAge",     value: "1"  }
+      - { key: "PasswordHistorySize",    value: "10" }
+
+  - name: "Verrouillage-Compte"
+    description: "Verrouillage apres 5 tentatives echouees"
+    link_to:
+      - ""
+    security:
+      - { key: "LockoutBadCount",    value: "5"  }
+      - { key: "LockoutDuration",    value: "30" }
+      - { key: "ResetLockoutCount",  value: "30" }
+
+  # --- Utilisateurs ---
+  - name: "Config-Utilisateurs"
+    description: "Parametres generaux pour tous les utilisateurs"
+    link_to:
+      - "OU=Utilisateurs"
+
+  - name: "Droits-Informatique"
+    description: "Privileges etendus pour le service informatique"
+    link_to:
+      - "OU=Informatique,OU=Utilisateurs"
+
+  - name: "Restriction-RH"
+    description: "Restrictions specifiques au service RH"
+    link_to:
+      - "OU=RH,OU=Utilisateurs"
+
+  - name: "Config-Direction"
+    description: "Parametres pour la direction"
+    link_to:
+      - "OU=Direction,OU=Utilisateurs"
+
+  # --- Postes ---
+  - name: "Config-Postes-Utilisateurs"
+    description: "Configuration standard des postes de travail"
+    link_to:
+      - "OU=Ordinateurs"
+
+  - name: "Config-Portables"
+    description: "Parametres specifiques aux portables (wifi, veille)"
+    link_to:
+      - "OU=Portables,OU=Ordinateurs"
+
+  # --- Serveurs ---
+  - name: "Securite-Serveurs"
+    description: "Politique de securite renforcee pour les serveurs"
+    link_to:
+      - "OU=Serveurs"
+    security:
+      - { key: "MinimumPasswordLength",  value: "14" }
+      - { key: "PasswordComplexity",     value: "1"  }
+      - { key: "MaximumPasswordAge",     value: "60" }
+      - { key: "LockoutBadCount",        value: "3"  }
+      - { key: "LockoutDuration",        value: "60" }
+
+  # --- Restrictions postes (registre Windows) ---
+  # scope: "User"    → s'applique aux profils utilisateurs
+  # scope: "Machine" → s'applique à la machine (tous les users)
+  #
+  # Types registre : 4=REG_DWORD  1=REG_SZ  2=REG_EXPAND_SZ  3=REG_BINARY
+  #
+  # DisableCMD :
+  #   1 = bloque cmd.exe ET les fichiers .bat/.cmd
+  #   2 = bloque cmd.exe seulement (les .bat restent autorisés)
+
+  - name: "Blocage-CMD"
+    description: "Bloque l'acces a l'invite de commandes pour les utilisateurs"
+    link_to:
+      - "OU=Utilisateurs"
+      - "OU=Ordinateurs"
+    registry:
+      scope: "User"
+      entries:
+        - key:   "Software\\Policies\\Microsoft\\Windows\\System"
+          value: "DisableCMD"
+          type:  4       # REG_DWORD
+          data:  1       # 1 = bloquer CMD + .bat / 2 = CMD seulement

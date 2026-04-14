@@ -46,6 +46,7 @@ DEPLOY_APACHE="${DEPLOY_APACHE:-1}"
 DEPLOY_GLPI="${DEPLOY_GLPI:-1}"
 DEPLOY_UPTIME="${DEPLOY_UPTIME:-1}"
 DEPLOY_WSERV="${DEPLOY_WSERV:-0}"
+DEPLOY_AD="${DEPLOY_AD:-0}"
 WEB_NAME="${WEB_NAME:-web}"
 WEB_CORES="${WEB_CORES:-2}"
 WEB_MEMORY="${WEB_MEMORY:-2048}"
@@ -58,6 +59,10 @@ UPTIME_NAME="${UPTIME_NAME:-monitoring}"
 UPTIME_CORES="${UPTIME_CORES:-2}"
 UPTIME_MEMORY="${UPTIME_MEMORY:-2048}"
 UPTIME_DISK="${UPTIME_DISK:-15G}"
+AD_DC_NAME="${AD_DC_NAME:-dc01}"
+AD_DC_CORES="${AD_DC_CORES:-2}"
+AD_DC_MEMORY="${AD_DC_MEMORY:-4096}"
+AD_DC_DISK="${AD_DC_DISK:-20G}"
 WSERV_NAME="${WSERV_NAME:-wserv}"
 WSERV_VM_ID="${WSERV_VM_ID:-210}"
 WSERV_CORES="${WSERV_CORES:-4}"
@@ -327,9 +332,10 @@ prompt_deployment_plan_if_interactive() {
   echo "  [2] GLPI"
   echo "  [3] Uptime Kuma"
   echo "  [4] Windows Server"
+  echo "  [5] Active Directory (Samba DC)"
 
   local services_input=""
-  read -r -p "Services à déployer (ex: 1 2 3 4) [1 2 3]: " services_input
+  read -r -p "Services à déployer (ex: 1 2 3 4 5) [1 2 3]: " services_input
   services_input="${services_input:-1 2 3}"
   services_input="$(echo "$services_input" | tr ',' ' ')"
 
@@ -337,14 +343,16 @@ prompt_deployment_plan_if_interactive() {
   DEPLOY_GLPI=0
   DEPLOY_UPTIME=0
   DEPLOY_WSERV=0
+  DEPLOY_AD=0
   for s in $services_input; do
     [[ "$s" == "1" ]] && DEPLOY_APACHE=1
     [[ "$s" == "2" ]] && DEPLOY_GLPI=1
     [[ "$s" == "3" ]] && DEPLOY_UPTIME=1
     [[ "$s" == "4" ]] && DEPLOY_WSERV=1
+    [[ "$s" == "5" ]] && DEPLOY_AD=1
   done
 
-  if [[ "$DEPLOY_APACHE" == "0" && "$DEPLOY_GLPI" == "0" && "$DEPLOY_UPTIME" == "0" && "$DEPLOY_WSERV" == "0" ]]; then
+  if [[ "$DEPLOY_APACHE" == "0" && "$DEPLOY_GLPI" == "0" && "$DEPLOY_UPTIME" == "0" && "$DEPLOY_WSERV" == "0" && "$DEPLOY_AD" == "0" ]]; then
     log_warn "Aucun service sélectionné, Apache activé par défaut."
     DEPLOY_APACHE=1
   fi
@@ -409,6 +417,13 @@ prompt_deployment_plan_if_interactive() {
       else
         WINDOWS_ENABLE_AGENT=0
       fi
+    fi
+    if [[ "$DEPLOY_AD" == "1" ]]; then
+      log_info "Configuration Active Directory (Samba DC)"
+      prompt_with_default AD_DC_NAME "Nom container DC" "$AD_DC_NAME"
+      prompt_with_default AD_DC_CORES "CPU DC" "$AD_DC_CORES"
+      prompt_with_default AD_DC_MEMORY "RAM DC (MB)" "$AD_DC_MEMORY"
+      prompt_with_default AD_DC_DISK "Disque DC" "$AD_DC_DISK"
     fi
   fi
 }
@@ -505,6 +520,17 @@ EOF
     memory    = $UPTIME_MEMORY
     disk_size = "$UPTIME_DISK"
     playbook  = "install_uptime_kuma.yml"
+  }
+EOF
+  fi
+
+  if [[ "$DEPLOY_AD" == "1" ]]; then
+    cat >> terraform/terraform.tfvars <<EOF
+  "$AD_DC_NAME" = {
+    cores     = $AD_DC_CORES
+    memory    = $AD_DC_MEMORY
+    disk_size = "$AD_DC_DISK"
+    playbook  = "install_samba_ad.yml"
   }
 EOF
   fi
@@ -621,6 +647,23 @@ print_service_urls() {
     echo "  AD NetBIOS: ${WINDOWS_DOMAIN_NETBIOS}"
     [[ -n "$ip_wserv" ]] && echo "  URL       : http://${ip_wserv}"
     echo "  Login     : ${WSERV_ADMIN_USER} / ${WSERV_ADMIN_PASSWORD}"
+  fi
+
+  if [[ "$DEPLOY_AD" == "1" ]]; then
+    local ip_dc=""
+    pushd terraform >/dev/null 2>&1
+    ip_dc="$(resolve_container_ip "$AD_DC_NAME" 2>/dev/null || true)"
+    popd >/dev/null 2>&1
+    echo ""
+    echo -e "${BOLD}Active Directory (Samba DC)${NC}"
+    echo "  Container : ${VM_PREFIX}-${AD_DC_NAME}"
+    echo "  IP        : ${ip_dc:-non trouvée}"
+    echo "  LDAP      : ldap://${ip_dc:-<ip>}"
+    echo "  Kerberos  : ${ip_dc:-<ip>}:88"
+    echo "  Domaine   : (voir ansible/vars/ad_config.yml)"
+    echo "  Login DC  : ${CI_USER} / ${CI_PASSWORD}"
+    echo "  Admin AD  : Administrator / (voir ansible/vars/ad_config.yml)"
+    echo "  Config OUs/GPOs : ansible/vars/ad_config.yml"
   fi
   echo ""
 }

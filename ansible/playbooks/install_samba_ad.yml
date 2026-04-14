@@ -1,0 +1,484 @@
+---
+# ============================================================
+# PLAYBOOK ANSIBLE - Active Directory (Samba 4 DC)
+# Installe un contrôleur de domaine complet avec OUs et GPOs
+# ============================================================
+- name: Installer et configurer Samba 4 Active Directory DC
+  hosts: all
+  become: yes
+
+  vars_files:
+    - "../../ansible/vars/ad_config.yml"
+
+  tasks:
+
+    # ========================================================
+    # [1/8] PRÉPARATION DU SYSTÈME
+    # ========================================================
+
+    - name: Mettre à jour le cache apt
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Installer les paquets requis
+      apt:
+        name:
+          - samba
+          - samba-dsdb-modules
+          - samba-vfs-modules
+          - krb5-user
+          - krb5-config
+          - winbind
+          - libpam-winbind
+          - libnss-winbind
+          - libpam-krb5
+          - python3-samba
+          - python3-ldb
+          - attr
+          - acl
+          - dnsutils
+          - net-tools
+          - curl
+          - lsb-release
+        state: present
+        install_recommends: no
+
+    - name: Définir le hostname court
+      hostname:
+        name: "dc01"
+
+    - name: Configurer /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: "{{ ansible_default_ipv4.address }}  dc01.{{ ad_realm | lower }}  dc01"
+        state: present
+
+    - name: Désactiver systemd-resolved (conflit DNS)
+      systemd:
+        name: systemd-resolved
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+
+    - name: Configurer resolv.conf pour pointer sur soi-même
+      copy:
+        content: |
+          search {{ ad_realm | lower }}
+          nameserver 127.0.0.1
+          nameserver 8.8.8.8
+        dest: /etc/resolv.conf
+        mode: '0644'
+
+    # ========================================================
+    # [2/8] ARRÊT DES SERVICES CONFLICTUELS
+    # ========================================================
+
+    - name: Arrêter et désactiver smbd / nmbd / winbind
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: no
+      loop:
+        - smbd
+        - nmbd
+        - winbind
+      ignore_errors: yes
+
+    - name: Sauvegarder smb.conf existant si présent
+      command: mv /etc/samba/smb.conf /etc/samba/smb.conf.bak
+      args:
+        removes: /etc/samba/smb.conf
+      ignore_errors: yes
+
+    # ========================================================
+    # [3/8] PROVISIONNEMENT DU DOMAINE AD
+    # ========================================================
+
+    - name: Vérifier si le domaine est déjà provisionné
+      stat:
+        path: /etc/samba/smb.conf
+      register: smb_conf_exists
+
+    - name: Provisionner le domaine Samba AD DC
+      command: >
+        samba-tool domain provision
+        --domain={{ ad_domain_short }}
+        --realm={{ ad_realm }}
+        --adminpass="{{ ad_admin_password }}"
+        --dns-backend=SAMBA_INTERNAL
+        --server-role=dc
+        --use-rfc2307
+        --option="dns forwarder = 8.8.8.8"
+      when: not smb_conf_exists.stat.exists
+
+    - name: Copier la configuration Kerberos générée par Samba
+      copy:
+        src: /var/lib/samba/private/krb5.conf
+        dest: /etc/krb5.conf
+        remote_src: yes
+        backup: yes
+      when: not smb_conf_exists.stat.exists
+
+    # ========================================================
+    # [4/8] DÉMARRAGE DU DC
+    # ========================================================
+
+    - name: Activer et démarrer samba-ad-dc
+      systemd:
+        name: samba-ad-dc
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Attendre que le port LDAP (389) soit disponible
+      wait_for:
+        port: 389
+        host: 127.0.0.1
+        delay: 5
+        timeout: 90
+
+    - name: Attendre que le port Kerberos (88) soit disponible
+      wait_for:
+        port: 88
+        host: 127.0.0.1
+        delay: 2
+        timeout: 60
+
+    - name: Vérifier le niveau fonctionnel du domaine
+      command: samba-tool domain level show
+      register: domain_level
+      changed_when: false
+
+    - name: Afficher le niveau fonctionnel
+      debug:
+        msg: "{{ domain_level.stdout_lines }}"
+
+    # ========================================================
+    # [5/8] CRÉATION DES UNITÉS D'ORGANISATION (OUs)
+    # ========================================================
+
+    - name: Créer les OUs (parent → enfant)
+      command: >
+        samba-tool ou create "{{ item.dn }}"
+        -U Administrator
+        --password="{{ ad_admin_password }}"
+      loop: "{{ organizational_units }}"
+      register: ou_result
+      failed_when:
+        - ou_result.rc != 0
+        - '"already exists" not in ou_result.stderr'
+      changed_when: ou_result.rc == 0
+
+    - name: Résumé des OUs créées
+      debug:
+        msg: "OU {{ item.item.dn }} → {{ 'créée' if item.rc == 0 else 'déjà existante' }}"
+      loop: "{{ ou_result.results }}"
+
+    # ========================================================
+    # [6/8] CRÉATION DES GROUPES DE SÉCURITÉ
+    # ========================================================
+
+    - name: Créer les groupes de sécurité
+      command: >
+        samba-tool group add "{{ item.name }}"
+        --description="{{ item.description }}"
+        --groupou="{{ item.ou }}"
+        -U Administrator
+        --password="{{ ad_admin_password }}"
+      loop: "{{ ad_groups }}"
+      register: group_result
+      failed_when:
+        - group_result.rc != 0
+        - '"already exists" not in group_result.stderr'
+      changed_when: group_result.rc == 0
+
+    # ========================================================
+    # [7/8] CRÉATION ET CONFIGURATION DES GPOs
+    # ========================================================
+
+    - name: Créer les GPOs
+      shell: |
+        GUID=$(samba-tool gpo list \
+          -U Administrator --password="{{ ad_admin_password }}" 2>/dev/null \
+          | grep -B1 "display name : {{ item.name }}" \
+          | grep -oP '\{[A-Fa-f0-9-]+\}' \
+          | head -1)
+        if [ -z "$GUID" ]; then
+          GUID=$(samba-tool gpo create "{{ item.name }}" \
+            -U Administrator --password="{{ ad_admin_password }}" 2>&1 \
+            | grep -oP '\{[A-Fa-f0-9-]+\}')
+        fi
+        echo "${GUID:-ERROR}"
+      loop: "{{ gpos }}"
+      register: gpo_create
+      changed_when: false
+
+    - name: Construire la table GUID des GPOs
+      set_fact:
+        gpo_guids: >-
+          {{ gpo_guids | default({}) | combine({
+              item.item.name: item.stdout | trim
+          }) }}
+      loop: "{{ gpo_create.results }}"
+      when:
+        - item.stdout | trim != ""
+        - item.stdout | trim != "ERROR"
+
+    - name: Afficher les GUIDs des GPOs créés
+      debug:
+        msg: "GPO '{{ item.key }}' → {{ item.value }}"
+      loop: "{{ gpo_guids | dict2items }}"
+      when: gpo_guids is defined
+
+    - name: Appliquer les paramètres de sécurité aux GPOs
+      shell: >
+        samba-tool gpo manage security set
+        "{{ gpo_guids[item.0.name] }}"
+        {{ item.1.key }} {{ item.1.value }}
+        -U Administrator
+        --password="{{ ad_admin_password }}"
+      loop: "{{ gpos | subelements('security', skip_missing=True) }}"
+      when:
+        - gpo_guids is defined
+        - item.0.name in gpo_guids
+        - gpo_guids[item.0.name] not in ['', 'ERROR']
+      register: security_result
+      failed_when:
+        - security_result.rc is defined
+        - security_result.rc != 0
+      ignore_errors: true
+
+    - name: Lier les GPOs aux OUs
+      shell: |
+        {% if item.1 %}
+        TARGET_DN="{{ item.1 }},{{ ad_base_dn }}"
+        {% else %}
+        TARGET_DN="{{ ad_base_dn }}"
+        {% endif %}
+        samba-tool gpo setlink "$TARGET_DN" "{{ gpo_guids[item.0.name] }}" \
+          -U Administrator --password="{{ ad_admin_password }}" 2>&1
+      loop: "{{ gpos | subelements('link_to', skip_missing=True) }}"
+      when:
+        - gpo_guids is defined
+        - item.0.name in gpo_guids
+        - gpo_guids[item.0.name] not in ['', 'ERROR']
+      register: link_result
+      failed_when:
+        - link_result.rc is defined
+        - link_result.rc != 0
+        - '"already linked" not in (link_result.stdout | default(""))'
+      ignore_errors: true
+
+    # ========================================================
+    # [8/9] POLITIQUES REGISTRE (Registry.pol dans SYSVOL)
+    # ========================================================
+    # Permet d'appliquer des clés de registre Windows via GPO.
+    # Le fichier Registry.pol est au format binaire PReg.
+    # scope "User"    → SYSVOL/.../User/Registry.pol
+    # scope "Machine" → SYSVOL/.../Machine/Registry.pol
+
+    - name: Déployer le générateur de Registry.pol
+      copy:
+        dest: /usr/local/bin/make_regpol.py
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+          """
+          Génère un fichier Registry.pol (format PReg) pour les GPOs Samba.
+          Usage : make_regpol.py '<json_entries>' '<output_path>'
+          """
+          import struct, sys, json, os
+
+          # Types registre
+          REG_SZ      = 1
+          REG_DWORD   = 4
+
+          def make_registry_pol(entries):
+              buf = b'PReg' + struct.pack('<I', 1)   # en-tête PReg v1
+              for e in entries:
+                  key   = e['key']
+                  val   = e['value']
+                  rtype = int(e['type'])
+                  rdata = e['data']
+
+                  if rtype == REG_DWORD:
+                      raw = struct.pack('<I', int(rdata))
+                  elif rtype == REG_SZ:
+                      raw = (str(rdata) + '\x00').encode('utf-16-le')
+                  else:
+                      print(f"[WARN] type {rtype} non supporté, ignoré", file=sys.stderr)
+                      continue
+
+                  buf += '['.encode('utf-16-le')
+                  buf += (key   + '\x00').encode('utf-16-le')
+                  buf += ';'.encode('utf-16-le')
+                  buf += (val   + '\x00').encode('utf-16-le')
+                  buf += ';'.encode('utf-16-le')
+                  buf += struct.pack('<I', rtype)
+                  buf += ';'.encode('utf-16-le')
+                  buf += struct.pack('<I', len(raw))
+                  buf += ';'.encode('utf-16-le')
+                  buf += raw
+                  buf += ']'.encode('utf-16-le')
+              return buf
+
+          if __name__ == '__main__':
+              entries     = json.loads(sys.argv[1])
+              output_path = sys.argv[2]
+              os.makedirs(os.path.dirname(output_path), exist_ok=True)
+              with open(output_path, 'wb') as f:
+                  f.write(make_registry_pol(entries))
+              print(f"[OK] Registry.pol écrit : {output_path}")
+
+    - name: Créer les répertoires SYSVOL pour les GPOs avec registre
+      file:
+        path: "/var/lib/samba/sysvol/{{ ad_realm | lower }}/Policies/{{ gpo_guids[item.name] }}/{{ item.registry.scope }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop: "{{ gpos }}"
+      when:
+        - item.registry is defined
+        - gpo_guids is defined
+        - item.name in gpo_guids
+        - gpo_guids[item.name] not in ['', 'ERROR']
+
+    - name: Générer les Registry.pol (politiques registre)
+      command: >
+        python3 /usr/local/bin/make_regpol.py
+        {{ item.registry.entries | to_json | quote }}
+        /var/lib/samba/sysvol/{{ ad_realm | lower }}/Policies/{{ gpo_guids[item.name] }}/{{ item.registry.scope }}/Registry.pol
+      loop: "{{ gpos }}"
+      when:
+        - item.registry is defined
+        - gpo_guids is defined
+        - item.name in gpo_guids
+        - gpo_guids[item.name] not in ['', 'ERROR']
+      register: regpol_result
+
+    - name: Confirmer la création des Registry.pol
+      debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ regpol_result.results }}"
+      when:
+        - item.skipped is not defined or not item.skipped
+        - item.stdout is defined
+
+    # ========================================================
+    # [9/9] MOTD ET INFORMATIONS FINALES
+    # ========================================================
+
+    - name: Créer un MOTD personnalisé
+      copy:
+        content: |
+          #!/bin/bash
+
+          GREEN='\033[0;32m'
+          BLUE='\033[0;34m'
+          CYAN='\033[0;36m'
+          YELLOW='\033[1;33m'
+          RED='\033[0;31m'
+          BOLD='\033[1m'
+          NC='\033[0m'
+
+          HOSTNAME=$(hostname)
+          IP=$(hostname -I | awk '{print $1}')
+          UPTIME=$(uptime -p | sed 's/up //')
+          CPU=$(nproc)
+          MEM_TOTAL=$(free -h | awk '/^Mem:/ {print $2}')
+          MEM_USED=$(free -h | awk '/^Mem:/ {print $3}')
+          DISK_USED=$(df -h / | awk 'NR==2 {print $5}')
+
+          # Statut Samba
+          SAMBA_STATUS=$(systemctl is-active samba-ad-dc 2>/dev/null)
+          if [ "$SAMBA_STATUS" = "active" ]; then
+            SAMBA_COLOR="${GREEN}"
+            SAMBA_ICON="✓"
+          else
+            SAMBA_COLOR="${RED}"
+            SAMBA_ICON="✗"
+          fi
+
+          echo ""
+          echo -e "${BOLD}${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+          echo -e "${BOLD}${BLUE}║       🏢 ACTIVE DIRECTORY - SAMBA DC - LXC            ║${NC}"
+          echo -e "${BOLD}${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
+          echo ""
+          echo -e "${CYAN}📊 Informations système :${NC}"
+          echo -e "${BOLD}┌───────────────────────────────────────────────────────┐${NC}"
+          echo -e "${BOLD}│${NC} 🖥️  Hostname : ${YELLOW}${HOSTNAME}${NC}"
+          echo -e "${BOLD}│${NC} 🌐 IP        : ${YELLOW}${IP}${NC}"
+          echo -e "${BOLD}│${NC} ⏱  Uptime    : ${YELLOW}${UPTIME}${NC}"
+          echo -e "${BOLD}│${NC} 💻 Samba DC  : ${SAMBA_COLOR}${SAMBA_ICON} ${SAMBA_STATUS}${NC}"
+          echo -e "${BOLD}└───────────────────────────────────────────────────────┘${NC}"
+          echo ""
+          echo -e "${CYAN}🏢 Domaine Active Directory :${NC}"
+          echo -e "${BOLD}┌───────────────────────────────────────────────────────┐${NC}"
+          echo -e "${BOLD}│${NC} Domaine  : ${YELLOW}{{ ad_realm }}${NC}"
+          echo -e "${BOLD}│${NC} Base DN  : ${YELLOW}{{ ad_base_dn }}${NC}"
+          echo -e "${BOLD}│${NC} LDAP     : ${YELLOW}ldap://${IP}${NC}"
+          echo -e "${BOLD}│${NC} Kerberos : ${YELLOW}${IP}:88${NC}"
+          echo -e "${BOLD}└───────────────────────────────────────────────────────┘${NC}"
+          echo ""
+          echo -e "${CYAN}👤 Compte Administrateur :${NC}"
+          echo -e "${BOLD}┌───────────────────────────────────────────────────────┐${NC}"
+          echo -e "${BOLD}│${NC} Utilisateur : ${YELLOW}Administrator@{{ ad_realm }}${NC}"
+          echo -e "${BOLD}│${NC} Commandes   : ${YELLOW}samba-tool user list${NC}"
+          echo -e "${BOLD}│${NC}               ${YELLOW}samba-tool gpo list${NC}"
+          echo -e "${BOLD}│${NC}               ${YELLOW}samba-tool ou list${NC}"
+          echo -e "${BOLD}└───────────────────────────────────────────────────────┘${NC}"
+          echo ""
+        dest: /etc/update-motd.d/99-custom-motd
+        mode: '0755'
+
+    - name: Récupérer la liste des OUs créées
+      command: >
+        samba-tool ou list
+        -U Administrator
+        --password="{{ ad_admin_password }}"
+      register: ou_list
+      changed_when: false
+
+    - name: Récupérer la liste des GPOs créés
+      command: >
+        samba-tool gpo list
+        -U Administrator
+        --password="{{ ad_admin_password }}"
+      register: gpo_list
+      changed_when: false
+
+    - name: Afficher le résumé final
+      debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════╗
+          ║        ACTIVE DIRECTORY INSTALLÉ ET CONFIGURÉ ! ✓        ║
+          ╚══════════════════════════════════════════════════════════╝
+
+          🏢 Domaine  : {{ ad_realm }}
+          🌐 IP DC    : {{ ansible_default_ipv4.address }}
+          📁 Base DN  : {{ ad_base_dn }}
+
+          🔗 Accès LDAP    : ldap://{{ ansible_default_ipv4.address }}
+          🔑 Kerberos      : {{ ansible_default_ipv4.address }}:88
+          🌐 DNS (domaine) : {{ ansible_default_ipv4.address }}
+
+          👤 Administrateur : Administrator@{{ ad_realm }}
+          🔐 Mot de passe   : {{ ad_admin_password }}
+
+          📂 OUs créées :
+          {{ ou_list.stdout }}
+
+          📋 GPOs créés :
+          {{ gpo_list.stdout }}
+
+          💡 Commandes utiles (depuis le DC) :
+            samba-tool user add <nom> --given-name=<prenom> --ou=<OU>
+            samba-tool group addmembers <groupe> <utilisateur>
+            samba-tool gpo list
+            samba-tool gpo show <GUID>
+
+          ⚠️  IMPORTANT : Changez le mot de passe Administrateur !
+          ⚠️  Pointez le DNS de vos clients vers : {{ ansible_default_ipv4.address }}
