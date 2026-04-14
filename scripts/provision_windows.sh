@@ -27,19 +27,21 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ANSIBLE_CONFIG="$PROJECT_ROOT/ansible/ansible.cfg"
 LOG_FILE="/tmp/gsb-ansible-$$.log"
 
-log_ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
-log_warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
-log_err()  { echo -e "  ${RED}✗${NC} $*"; }
+TTY=/dev/tty
+[[ ! -w "$TTY" ]] && TTY=/dev/stderr
+
+log_ok()   { echo -e "  ${GREEN}✓${NC} $*" >"$TTY"; }
+log_warn() { echo -e "  ${YELLOW}⚠${NC} $*" >"$TTY"; }
+log_err()  { echo -e "  ${RED}✗${NC} $*" >"$TTY"; }
 
 _SPINNER_PID=""
 _SPINNER_MSG=""
 
 _spinner_loop() {
-  local msg="$1"
   local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
   local i=0
   while true; do
-    printf "\r  \033[0;36m${frames[$i]}\033[0m %s" "$msg"
+    printf "\r  \033[0;36m${frames[$i]}\033[0m %s" "$_SPINNER_MSG" >"$TTY"
     i=$(( (i + 1) % 10 ))
     sleep 0.08
   done
@@ -47,27 +49,24 @@ _spinner_loop() {
 
 start_spinner() {
   _SPINNER_MSG="$1"
-  _spinner_loop "$1" &
+  _spinner_loop &
   _SPINNER_PID=$!
   disown "$_SPINNER_PID" 2>/dev/null || true
 }
 
 stop_spinner() {
   local status="${1:-0}"
-  if [[ -n "$_SPINNER_PID" ]]; then
-    kill "$_SPINNER_PID" 2>/dev/null || true
-    _SPINNER_PID=""
-    printf "\r\033[K"
-  fi
+  [[ -n "$_SPINNER_PID" ]] && { kill "$_SPINNER_PID" 2>/dev/null || true; _SPINNER_PID=""; }
+  printf "\r\033[K" >"$TTY"
   if [[ "$status" == "0" ]]; then
-    echo -e "  ${GREEN}✓${NC} ${_SPINNER_MSG}"
+    echo -e "  ${GREEN}✓${NC} ${_SPINNER_MSG}" >"$TTY"
   else
-    echo -e "  ${RED}✗${NC} ${_SPINNER_MSG}"
+    echo -e "  ${RED}✗${NC} ${_SPINNER_MSG}" >"$TTY"
     if [[ -s "$LOG_FILE" ]]; then
-      echo -e "  ${DIM}--- dernières lignes ---${NC}"
-      grep -E "ERROR|FAILED|fatal|error" "$LOG_FILE" | tail -10 | sed 's/^/    /' || \
-        tail -10 "$LOG_FILE" | sed 's/^/    /'
-      echo -e "  ${DIM}--- log complet: ${LOG_FILE} ---${NC}"
+      echo -e "  ${DIM}--- erreur ---${NC}" >"$TTY"
+      { grep -E "FAILED|fatal|ERROR|error" "$LOG_FILE" | tail -8 \
+          || tail -8 "$LOG_FILE"; } | sed 's/^/    /' >"$TTY"
+      echo -e "  ${DIM}log complet: ${LOG_FILE}${NC}" >"$TTY"
     fi
   fi
 }
