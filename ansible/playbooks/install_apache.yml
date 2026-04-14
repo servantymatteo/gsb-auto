@@ -9,7 +9,7 @@
   # "hosts: all" = exécute sur tous les hôtes dans l'inventaire
   # Terraform passera l'IP du container créé comme inventaire
 
-  become: yes
+  become: true
   # "become: yes" = utilise sudo (exécute en tant que root)
   # Nécessaire pour installer des paquets
 
@@ -55,55 +55,172 @@
         # "enabled: yes" = démarre automatiquement au boot
 
     - name: Créer une page d'accueil personnalisée
-      # Remplace la page par défaut d'Apache
       copy:
-        # Module "copy" = copie du contenu vers un fichier
         content: |
           <!DOCTYPE html>
-          <html>
+          <html lang="fr">
           <head>
-              <title>Container {{ ansible_hostname }}</title>
-              <style>
-                  body {
-                      font-family: Arial, sans-serif;
-                      margin: 50px;
-                      background: #f0f0f0;
-                  }
-                  .container {
-                      background: white;
-                      padding: 30px;
-                      border-radius: 10px;
-                      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                  }
-                  h1 { color: #0066cc; }
-              </style>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>GSB — {{ ansible_hostname }}</title>
+            <style>
+              *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                background: #0f1117;
+                color: #e2e8f0;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+              }
+
+              .card {
+                background: #1a1d27;
+                border: 1px solid #2d3148;
+                border-radius: 16px;
+                padding: 48px 56px;
+                max-width: 560px;
+                width: 90%;
+                box-shadow: 0 24px 64px rgba(0,0,0,0.4);
+              }
+
+              .badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                background: #1e3a5f;
+                color: #60a5fa;
+                border: 1px solid #2563eb44;
+                border-radius: 20px;
+                padding: 4px 12px;
+                font-size: 12px;
+                font-weight: 600;
+                letter-spacing: 0.05em;
+                text-transform: uppercase;
+                margin-bottom: 24px;
+              }
+
+              .dot {
+                width: 6px;
+                height: 6px;
+                border-radius: 50%;
+                background: #22c55e;
+                animation: pulse 2s infinite;
+              }
+
+              @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.4; }
+              }
+
+              h1 {
+                font-size: 28px;
+                font-weight: 700;
+                color: #f8fafc;
+                margin-bottom: 8px;
+                letter-spacing: -0.02em;
+              }
+
+              .subtitle {
+                color: #64748b;
+                font-size: 14px;
+                margin-bottom: 36px;
+              }
+
+              .info-grid {
+                display: grid;
+                gap: 12px;
+                margin-bottom: 36px;
+              }
+
+              .info-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                background: #0f1117;
+                border: 1px solid #1e2235;
+                border-radius: 10px;
+                padding: 12px 16px;
+              }
+
+              .info-label {
+                font-size: 12px;
+                font-weight: 500;
+                color: #475569;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+              }
+
+              .info-value {
+                font-size: 14px;
+                font-weight: 600;
+                color: #cbd5e1;
+                font-family: 'SF Mono', 'Fira Code', monospace;
+              }
+
+              .info-value.ip {
+                color: #60a5fa;
+              }
+
+              .footer {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding-top: 24px;
+                border-top: 1px solid #1e2235;
+                font-size: 12px;
+                color: #334155;
+              }
+
+              .footer strong {
+                color: #475569;
+              }
+            </style>
           </head>
           <body>
-              <div class="container">
-                  <h1>🚀 Bienvenue sur le serveur Apache</h1>
-                  <p><strong>Hostname:</strong> {{ ansible_hostname }}</p>
-                  <p><strong>IP:</strong> {{ ansible_default_ipv4.address }}</p>
-                  <p><strong>OS:</strong> {{ ansible_distribution }} {{ ansible_distribution_version }}</p>
-                  <hr>
-                  <p>✅ Déployé automatiquement avec <strong>Terraform</strong> + <strong>Ansible</strong></p>
+            <div class="card">
+              <div class="badge">
+                <span class="dot"></span>
+                En ligne
               </div>
+              <h1>Serveur Web GSB</h1>
+              <p class="subtitle">Serveur Apache — provisionné automatiquement</p>
+
+              <div class="info-grid">
+                <div class="info-row">
+                  <span class="info-label">Hostname</span>
+                  <span class="info-value">{{ ansible_hostname }}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Adresse IP</span>
+                  <span class="info-value ip">{{ ansible_default_ipv4.address }}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Système</span>
+                  <span class="info-value">{{ ansible_distribution }} {{ ansible_distribution_version }}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Noyau</span>
+                  <span class="info-value">{{ ansible_kernel }}</span>
+                </div>
+              </div>
+
+              <div class="footer">
+                Deploye avec <strong>Terraform</strong> + <strong>Ansible</strong> via gsb-auto
+              </div>
+            </div>
           </body>
           </html>
-        # Le contenu HTML ci-dessus sera écrit dans le fichier
-        # {{ ansible_hostname }}, etc. = variables Ansible (facts)
-        # Ansible collecte automatiquement ces infos sur l'hôte
         dest: /var/www/html/index.html
-        # Chemin de destination du fichier
-        # C'est la page par défaut d'Apache
 
     - name: Ouvrir le port 80 dans le firewall (si UFW actif)
-      # Optionnel : ouvre le port HTTP si un firewall est actif
       ufw:
         rule: allow
         port: '80'
         proto: tcp
-      ignore_errors: yes
-      # "ignore_errors: yes" = continue même si UFW n'est pas installé
+      ignore_errors: true
 
     - name: Créer un MOTD personnalisé
       copy:
