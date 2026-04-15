@@ -102,10 +102,12 @@
     - name: Créer le compte admin mail
       user:
         name: "{{ mail_admin_user }}"
-        password: "{{ mail_admin_password | password_hash('sha512') }}"
         shell: /bin/bash
         create_home: true
         state: present
+
+    - name: Définir le mot de passe (chpasswd — fiable pour PAM)
+      shell: echo "{{ mail_admin_user }}:{{ mail_admin_password }}" | chpasswd
 
     - name: Créer le dossier Maildir pour l'admin
       file:
@@ -114,6 +116,13 @@
         owner: "{{ mail_admin_user }}"
         group: "{{ mail_admin_user }}"
         mode: '0700'
+
+    - name: Créer la config PAM Dovecot
+      copy:
+        dest: /etc/pam.d/dovecot
+        content: |
+          @include common-auth
+          @include common-account
 
     - name: Configurer Roundcube
       copy:
