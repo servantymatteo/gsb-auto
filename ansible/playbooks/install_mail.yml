@@ -155,10 +155,29 @@
       args:
         executable: /bin/bash
 
-    - name: Activer la config Apache Roundcube
-      command: a2enconf roundcube
+    - name: Trouver le répertoire web Roundcube
+      shell: find /usr/share/roundcube /var/lib/roundcube -name "index.php" -maxdepth 3 2>/dev/null | head -1 | xargs dirname
+      register: roundcube_webroot
+      changed_when: false
+
+    - name: Écrire la config Apache Roundcube
+      copy:
+        dest: /etc/apache2/conf-available/roundcube-gsb.conf
+        content: |
+          Alias /roundcube {{ roundcube_webroot.stdout }}
+          Alias /webmail   {{ roundcube_webroot.stdout }}
+
+          <Directory {{ roundcube_webroot.stdout }}>
+            Options -FollowSymLinks
+            AllowOverride All
+            Require all granted
+            DirectoryIndex index.php
+          </Directory>
+
+    - name: Activer la config Roundcube
+      command: a2enconf roundcube-gsb
       args:
-        creates: /etc/apache2/conf-enabled/roundcube.conf
+        creates: /etc/apache2/conf-enabled/roundcube-gsb.conf
 
     - name: Activer modules Apache
       apache2_module:
