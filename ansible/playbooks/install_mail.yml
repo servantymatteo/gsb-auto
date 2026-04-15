@@ -4,9 +4,9 @@
   become: true
 
   vars:
-    mail_domain: "{{ mail_domain | default('gsb.local') }}"
-    mail_admin_user: "{{ mail_admin_user | default('admin') }}"
-    mail_admin_password: "{{ mail_admin_password | default('Formation13@') }}"
+    mail_domain: "gsb.local"
+    mail_admin_user: "admin"
+    mail_admin_password: "Formation13@"
     mail_hostname: "{{ ansible_hostname }}"
 
   tasks:

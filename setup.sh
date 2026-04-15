@@ -575,6 +575,14 @@ SSH_KEYS="$SSH_PUB_KEY"
 CI_USER=$CI_USER
 CI_PASSWORD=$CI_PASSWORD
 EOF
+
+  if [[ "$DEPLOY_MAIL" == "1" ]]; then
+    cat > ansible/vars/mail_config.yml <<EOF
+mail_domain: "${MAIL_DOMAIN}"
+mail_admin_user: "${MAIL_ADMIN_USER}"
+mail_admin_password: "${MAIL_ADMIN_PASSWORD}"
+EOF
+  fi
 }
 
 write_tfvars() {

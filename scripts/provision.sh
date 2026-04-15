@@ -72,11 +72,19 @@ log_ok "[${CONTAINER_NAME}] SSH OK"
 SERVICE=$(basename "$PLAYBOOK" .yml | sed 's/install_//')
 log_step "[${CONTAINER_NAME}] Installation ${SERVICE}..."
 
+# Charger un fichier de vars spécifique au service si il existe
+EXTRA_VARS=""
+VARS_FILE="$PROJECT_ROOT/ansible/vars/${SERVICE}_config.yml"
+if [[ -f "$VARS_FILE" ]]; then
+  EXTRA_VARS="@${VARS_FILE}"
+fi
+
 ANSIBLE_FORCE_COLOR=0 ANSIBLE_CONFIG="$ANSIBLE_CONFIG" ANSIBLE_HOST_KEY_CHECKING=False \
   ansible-playbook \
   --private-key="$SSH_KEY" \
   -i "${CONTAINER_IP}," \
   -u root \
+  ${EXTRA_VARS:+--extra-vars "$EXTRA_VARS"} \
   "$PLAYBOOK" >>"$LOG_FILE" 2>&1 \
   && log_ok "[${CONTAINER_NAME}] ${SERVICE} installé" \
   || { log_fail "[${CONTAINER_NAME}] ${SERVICE} échoué"; exit 1; }
