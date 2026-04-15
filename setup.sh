@@ -107,6 +107,14 @@ DEPLOY_GLPI="${DEPLOY_GLPI:-1}"
 DEPLOY_UPTIME="${DEPLOY_UPTIME:-1}"
 DEPLOY_WSERV="${DEPLOY_WSERV:-0}"
 DEPLOY_AD="${DEPLOY_AD:-0}"
+DEPLOY_MAIL="${DEPLOY_MAIL:-0}"
+MAIL_NAME="${MAIL_NAME:-mail}"
+MAIL_CORES="${MAIL_CORES:-2}"
+MAIL_MEMORY="${MAIL_MEMORY:-2048}"
+MAIL_DISK="${MAIL_DISK:-20G}"
+MAIL_DOMAIN="${MAIL_DOMAIN:-gsb.local}"
+MAIL_ADMIN_USER="${MAIL_ADMIN_USER:-admin}"
+MAIL_ADMIN_PASSWORD="${MAIL_ADMIN_PASSWORD:-Formation13@}"
 WEB_NAME="${WEB_NAME:-web}"
 WEB_CORES="${WEB_CORES:-2}"
 WEB_MEMORY="${WEB_MEMORY:-2048}"
@@ -440,9 +448,10 @@ prompt_deployment_plan_if_interactive() {
   echo "  [3] Uptime Kuma"
   echo "  [4] Windows Server"
   echo "  [5] Active Directory (Samba DC)"
+  echo "  [6] Serveur Mail (Postfix + Dovecot + Roundcube)"
 
   local services_input=""
-  read -r -p "Services à déployer (ex: 1 2 3 4 5) [1 2 3]: " services_input
+  read -r -p "Services à déployer (ex: 1 2 3 4 5 6) [1 2 3]: " services_input
   services_input="${services_input:-1 2 3}"
   services_input="$(echo "$services_input" | tr ',' ' ')"
 
@@ -451,15 +460,17 @@ prompt_deployment_plan_if_interactive() {
   DEPLOY_UPTIME=0
   DEPLOY_WSERV=0
   DEPLOY_AD=0
+  DEPLOY_MAIL=0
   for s in $services_input; do
     [[ "$s" == "1" ]] && DEPLOY_APACHE=1
     [[ "$s" == "2" ]] && DEPLOY_GLPI=1
     [[ "$s" == "3" ]] && DEPLOY_UPTIME=1
     [[ "$s" == "4" ]] && DEPLOY_WSERV=1
     [[ "$s" == "5" ]] && DEPLOY_AD=1
+    [[ "$s" == "6" ]] && DEPLOY_MAIL=1
   done
 
-  if [[ "$DEPLOY_APACHE" == "0" && "$DEPLOY_GLPI" == "0" && "$DEPLOY_UPTIME" == "0" && "$DEPLOY_WSERV" == "0" && "$DEPLOY_AD" == "0" ]]; then
+  if [[ "$DEPLOY_APACHE" == "0" && "$DEPLOY_GLPI" == "0" && "$DEPLOY_UPTIME" == "0" && "$DEPLOY_WSERV" == "0" && "$DEPLOY_AD" == "0" && "$DEPLOY_MAIL" == "0" ]]; then
     log_warn "Aucun service sélectionné, Apache activé par défaut."
     DEPLOY_APACHE=1
   fi
@@ -478,6 +489,13 @@ prompt_deployment_plan_if_interactive() {
   if [[ "$DEPLOY_AD" == "1" ]]; then
     log_info "Configuration Active Directory (Samba DC)"
     prompt_ad_structure
+  fi
+
+  if [[ "$DEPLOY_MAIL" == "1" ]]; then
+    log_info "Configuration Serveur Mail"
+    prompt_with_default MAIL_DOMAIN "Domaine mail (ex: gsb.local)" "$MAIL_DOMAIN"
+    prompt_with_default MAIL_ADMIN_USER "Utilisateur admin mail" "$MAIL_ADMIN_USER"
+    prompt_with_default MAIL_ADMIN_PASSWORD "Mot de passe admin mail" "$MAIL_ADMIN_PASSWORD"
   fi
 
   if [[ "$use_defaults" == "n" || "$use_defaults" == "N" ]]; then
@@ -638,6 +656,17 @@ EOF
 EOF
   fi
 
+  if [[ "$DEPLOY_MAIL" == "1" ]]; then
+    cat >> terraform/terraform.tfvars <<EOF
+  "$MAIL_NAME" = {
+    cores     = $MAIL_CORES
+    memory    = $MAIL_MEMORY
+    disk_size = "$MAIL_DISK"
+    playbook  = "install_mail.yml"
+  }
+EOF
+  fi
+
   cat >> terraform/terraform.tfvars <<EOF
 }
 
@@ -770,6 +799,22 @@ print_service_urls() {
     echo "  Admin AD  : Administrator / (voir ansible/vars/ad_config.yml)"
     echo "  Config OUs/GPOs : ansible/vars/ad_config.yml"
   fi
+
+  if [[ "$DEPLOY_MAIL" == "1" ]]; then
+    local ip_mail=""
+    pushd terraform >/dev/null 2>&1
+    ip_mail="$(resolve_container_ip "$MAIL_NAME" 2>/dev/null || true)"
+    popd >/dev/null 2>&1
+    echo ""
+    echo -e "${BOLD}Serveur Mail${NC}"
+    echo "  Container : ${VM_PREFIX}-${MAIL_NAME}"
+    echo "  IP        : ${ip_mail:-non trouvée}"
+    echo "  Domaine   : ${MAIL_DOMAIN}"
+    echo "  SMTP      : ${ip_mail:-<ip>}:25 / 587"
+    echo "  IMAP      : ${ip_mail:-<ip>}:143 / 993"
+    [[ -n "$ip_mail" ]] && echo "  Webmail   : http://${ip_mail}/roundcube"
+    echo "  Login     : ${MAIL_ADMIN_USER}@${MAIL_DOMAIN} / ${MAIL_ADMIN_PASSWORD}"
+  fi
   echo ""
 }
 
@@ -882,6 +927,18 @@ configure_uptime_kuma() {
     monitors+="${sep}{\"name\":\"Windows WinRM — ${VM_PREFIX}-${WSERV_NAME}\",\"type\":\"tcp\",\"hostname\":\"${WSERV_RESOLVED_IP}\",\"port\":5985}"
   fi
 
+  if [[ "$DEPLOY_MAIL" == "1" ]]; then
+    local ip_mail; ip_mail="$(resolve_container_ip "$MAIL_NAME")"
+    if [[ -n "$ip_mail" ]]; then
+      monitors+="${sep}{\"name\":\"Mail SMTP — ${VM_PREFIX}-${MAIL_NAME}\",\"type\":\"tcp\",\"hostname\":\"${ip_mail}\",\"port\":25}"
+      sep=","
+      monitors+="${sep}{\"name\":\"Mail IMAP — ${VM_PREFIX}-${MAIL_NAME}\",\"type\":\"tcp\",\"hostname\":\"${ip_mail}\",\"port\":143}"
+      sep=","
+      monitors+="${sep}{\"name\":\"Webmail — ${VM_PREFIX}-${MAIL_NAME}\",\"type\":\"http\",\"url\":\"http://${ip_mail}/roundcube\"}"
+      sep=","
+    fi
+  fi
+
   popd >/dev/null
 
   monitors+="]"
@@ -935,6 +992,7 @@ main() {
   [[ "$DEPLOY_UPTIME" == "1" ]] && services_list+="Uptime "
   [[ "$DEPLOY_WSERV"  == "1" ]] && services_list+="Windows "
   [[ "$DEPLOY_AD"     == "1" ]] && services_list+="SambaAD "
+  [[ "$DEPLOY_MAIL"   == "1" ]] && services_list+="Mail "
   log_ok "Services sélectionnés: ${services_list:-aucun}"
 
   # ── Étape 3 : Auth Proxmox ───────────────────────────────────────────────

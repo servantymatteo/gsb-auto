@@ -1,0 +1,187 @@
+---
+- name: Installer le serveur mail (Postfix + Dovecot + Roundcube)
+  hosts: all
+  become: true
+
+  vars:
+    mail_domain: "{{ mail_domain | default('gsb.local') }}"
+    mail_admin_user: "{{ mail_admin_user | default('admin') }}"
+    mail_admin_password: "{{ mail_admin_password | default('Formation13@') }}"
+    mail_hostname: "{{ ansible_hostname }}"
+
+  tasks:
+    - name: Mettre à jour le cache apt
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Pré-configurer Postfix (évite les prompts interactifs)
+      debconf:
+        name: postfix
+        question: "{{ item.question }}"
+        value: "{{ item.value }}"
+        vtype: "{{ item.vtype }}"
+      loop:
+        - { question: "postfix/mailname",        value: "{{ mail_domain }}", vtype: "string" }
+        - { question: "postfix/main_mailer_type", value: "Internet Site",    vtype: "select" }
+
+    - name: Installer Postfix, Dovecot et Roundcube
+      apt:
+        name:
+          - postfix
+          - dovecot-core
+          - dovecot-imapd
+          - dovecot-pop3d
+          - roundcube
+          - roundcube-core
+          - roundcube-sqlite3
+          - apache2
+          - libapache2-mod-php
+          - php-mbstring
+          - php-intl
+        state: present
+
+    - name: Configurer Postfix — main.cf
+      copy:
+        dest: /etc/postfix/main.cf
+        content: |
+          smtpd_banner = $myhostname ESMTP
+          biff = no
+          append_dot_mydomain = no
+          readme_directory = no
+
+          myhostname = {{ mail_hostname }}.{{ mail_domain }}
+          mydomain = {{ mail_domain }}
+          myorigin = $mydomain
+          mydestination = $myhostname, localhost.$mydomain, localhost, $mydomain
+          relayhost =
+          mynetworks = 127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128
+          mailbox_size_limit = 0
+          recipient_delimiter = +
+          inet_interfaces = all
+          inet_protocols = all
+
+          home_mailbox = Maildir/
+          mailbox_command =
+          smtpd_sasl_type = dovecot
+          smtpd_sasl_path = private/auth
+          smtpd_sasl_auth_enable = yes
+          smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination
+
+    - name: Configurer Dovecot — authentification
+      copy:
+        dest: /etc/dovecot/conf.d/10-auth.conf
+        content: |
+          disable_plaintext_auth = no
+          auth_mechanisms = plain login
+          !include auth-system.conf.ext
+
+    - name: Configurer Dovecot — maildir
+      copy:
+        dest: /etc/dovecot/conf.d/10-mail.conf
+        content: |
+          mail_location = maildir:~/Maildir
+          namespace inbox {
+            inbox = yes
+          }
+
+    - name: Configurer Dovecot — SASL socket pour Postfix
+      copy:
+        dest: /etc/dovecot/conf.d/10-master.conf
+        content: |
+          service imap-login {
+            inet_listener imap { port = 143 }
+            inet_listener imaps { port = 993 ssl = yes }
+          }
+          service pop3-login {
+            inet_listener pop3 { port = 110 }
+          }
+          service auth {
+            unix_listener /var/spool/postfix/private/auth {
+              mode = 0660
+              user = postfix
+              group = postfix
+            }
+          }
+
+    - name: Créer le compte admin mail
+      user:
+        name: "{{ mail_admin_user }}"
+        password: "{{ mail_admin_password | password_hash('sha512') }}"
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    - name: Créer le dossier Maildir pour l'admin
+      file:
+        path: "/home/{{ mail_admin_user }}/Maildir"
+        state: directory
+        owner: "{{ mail_admin_user }}"
+        group: "{{ mail_admin_user }}"
+        mode: '0700'
+
+    - name: Configurer Roundcube — base de données et domaine
+      copy:
+        dest: /etc/roundcube/config.inc.php
+        content: |
+          <?php
+          $config['db_dsnw'] = 'sqlite:////var/lib/roundcube/roundcube.db?mode=0640';
+          $config['default_host'] = 'localhost';
+          $config['default_port'] = 143;
+          $config['smtp_server'] = 'localhost';
+          $config['smtp_port'] = 25;
+          $config['smtp_user'] = '%u';
+          $config['smtp_pass'] = '%p';
+          $config['product_name'] = 'GSB Webmail';
+          $config['des_key'] = '{{ lookup("password", "/dev/null length=24 chars=ascii_letters") }}';
+          $config['plugins'] = ['archive', 'zipdownload'];
+          $config['language'] = 'fr_FR';
+          $config['username_domain'] = '{{ mail_domain }}';
+          $config['mail_domain'] = '{{ mail_domain }}';
+
+    - name: Activer le module Apache pour Roundcube
+      copy:
+        dest: /etc/apache2/conf-enabled/roundcube.conf
+        content: |
+          Alias /roundcube /var/lib/roundcube/public_html
+          Alias /webmail   /var/lib/roundcube/public_html
+
+          <Directory /var/lib/roundcube/public_html>
+            Options -FollowSymLinks
+            AllowOverride All
+            Require all granted
+          </Directory>
+
+    - name: Activer mod_rewrite Apache
+      apache2_module:
+        name: rewrite
+        state: present
+
+    - name: Démarrer et activer les services
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+        enabled: true
+        daemon_reload: true
+      loop:
+        - postfix
+        - dovecot
+        - apache2
+
+    - name: Ouvrir les ports firewall (si UFW actif)
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: ['25', '143', '587', '993', '80']
+      ignore_errors: true
+
+    - name: Résumé
+      debug:
+        msg:
+          - "Serveur mail opérationnel"
+          - "Domaine  : {{ mail_domain }}"
+          - "SMTP     : {{ ansible_default_ipv4.address }}:25"
+          - "IMAP     : {{ ansible_default_ipv4.address }}:143"
+          - "Webmail  : http://{{ ansible_default_ipv4.address }}/roundcube"
+          - "Compte   : {{ mail_admin_user }}@{{ mail_domain }}"
