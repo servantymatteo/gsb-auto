@@ -39,6 +39,7 @@
           - libapache2-mod-php
           - php-mbstring
           - php-intl
+          - php-net-smtp
         state: present
 
     - name: Configurer Postfix — main.cf
@@ -114,12 +115,12 @@
         group: "{{ mail_admin_user }}"
         mode: '0700'
 
-    - name: Configurer Roundcube — base de données et domaine
+    - name: Configurer Roundcube
       copy:
         dest: /etc/roundcube/config.inc.php
         content: |
           <?php
-          $config['db_dsnw'] = 'sqlite:////var/lib/roundcube/roundcube.db?mode=0640';
+          $config['db_dsnw'] = 'sqlite:////var/lib/roundcube/db/sqlite.db';
           $config['default_host'] = 'localhost';
           $config['default_port'] = 143;
           $config['smtp_server'] = 'localhost';
@@ -127,29 +128,44 @@
           $config['smtp_user'] = '%u';
           $config['smtp_pass'] = '%p';
           $config['product_name'] = 'GSB Webmail';
-          $config['des_key'] = '{{ lookup("password", "/dev/null length=24 chars=ascii_letters") }}';
+          $config['des_key'] = 'gsb_auto_roundcube_key24';
           $config['plugins'] = ['archive', 'zipdownload'];
           $config['language'] = 'fr_FR';
           $config['username_domain'] = '{{ mail_domain }}';
           $config['mail_domain'] = '{{ mail_domain }}';
+          $config['support_url'] = '';
+          $config['skin'] = 'elastic';
 
-    - name: Activer le module Apache pour Roundcube
-      copy:
-        dest: /etc/apache2/conf-enabled/roundcube.conf
-        content: |
-          Alias /roundcube /var/lib/roundcube/public_html
-          Alias /webmail   /var/lib/roundcube/public_html
+    - name: Créer le dossier DB Roundcube
+      file:
+        path: /var/lib/roundcube/db
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0750'
 
-          <Directory /var/lib/roundcube/public_html>
-            Options -FollowSymLinks
-            AllowOverride All
-            Require all granted
-          </Directory>
+    - name: Initialiser la base SQLite Roundcube
+      shell: |
+        php /usr/share/roundcube/bin/initdb.sh --dir /usr/share/roundcube/SQL 2>/dev/null || true
+        if [ ! -f /var/lib/roundcube/db/sqlite.db ]; then
+          sqlite3 /var/lib/roundcube/db/sqlite.db < /usr/share/roundcube/SQL/sqlite.initial.sql
+        fi
+        chown www-data:www-data /var/lib/roundcube/db/sqlite.db
+        chmod 640 /var/lib/roundcube/db/sqlite.db
+      args:
+        executable: /bin/bash
 
-    - name: Activer mod_rewrite Apache
+    - name: Activer la config Apache Roundcube
+      command: a2enconf roundcube
+      args:
+        creates: /etc/apache2/conf-enabled/roundcube.conf
+
+    - name: Activer modules Apache
       apache2_module:
-        name: rewrite
+        name: "{{ item }}"
         state: present
+      loop: [rewrite, php8.2]
+      ignore_errors: true
 
     - name: Démarrer et activer les services
       systemd:
