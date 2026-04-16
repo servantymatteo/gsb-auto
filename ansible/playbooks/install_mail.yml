@@ -97,12 +97,45 @@
         group: "{{ mail_admin_user }}"
         mode: '0700'
 
-    - name: Créer la config PAM Dovecot
+    - name: Générer le hash du mot de passe Dovecot
+      shell: "doveadm pw -s SHA512-CRYPT -p '{{ mail_admin_password }}'"
+      register: dovecot_password_hash
+      changed_when: false
+
+    - name: Créer le fichier passwd Dovecot
       copy:
-        dest: /etc/pam.d/dovecot
+        dest: /etc/dovecot/users
+        content: "{{ mail_admin_user }}:{{ dovecot_password_hash.stdout }}\n"
+        owner: root
+        group: dovecot
+        mode: '0640'
+
+    - name: Créer l'auth passdb passwd-file pour Dovecot
+      copy:
+        dest: /etc/dovecot/conf.d/auth-passwdfile.conf.ext
         content: |
-          @include common-auth
-          @include common-account
+          passdb {
+            driver = passwd-file
+            args = scheme=SHA512-CRYPT /etc/dovecot/users
+          }
+          userdb {
+            driver = passwd
+          }
+        owner: root
+        group: dovecot
+        mode: '0640'
+
+    - name: Désactiver l'auth PAM système de Dovecot
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^!include auth-system\.conf\.ext'
+        line: '#!include auth-system.conf.ext'
+
+    - name: Activer l'auth passwd-file de Dovecot
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^#!include auth-passwdfile\.conf\.ext'
+        line: '!include auth-passwdfile.conf.ext'
 
     - name: Récupérer la dernière version de SnappyMail
       shell: |
