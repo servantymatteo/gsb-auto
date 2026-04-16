@@ -820,7 +820,7 @@ print_service_urls() {
     echo "  Domaine   : ${MAIL_DOMAIN}"
     echo "  SMTP      : ${ip_mail:-<ip>}:25 / 587"
     echo "  IMAP      : ${ip_mail:-<ip>}:143 / 993"
-    [[ -n "$ip_mail" ]] && echo "  Webmail   : http://${ip_mail}/roundcube"
+    [[ -n "$ip_mail" ]] && echo "  Webmail   : http://${ip_mail}/"
     echo "  Login     : ${MAIL_ADMIN_USER}@${MAIL_DOMAIN} / ${MAIL_ADMIN_PASSWORD}"
   fi
   echo ""
@@ -942,7 +942,7 @@ configure_uptime_kuma() {
       sep=","
       monitors+="${sep}{\"name\":\"Mail IMAP — ${VM_PREFIX}-${MAIL_NAME}\",\"type\":\"tcp\",\"hostname\":\"${ip_mail}\",\"port\":143}"
       sep=","
-      monitors+="${sep}{\"name\":\"Webmail — ${VM_PREFIX}-${MAIL_NAME}\",\"type\":\"http\",\"url\":\"http://${ip_mail}/roundcube\"}"
+      monitors+="${sep}{\"name\":\"Webmail — ${VM_PREFIX}-${MAIL_NAME}\",\"type\":\"http\",\"url\":\"http://${ip_mail}/\"}"
       sep=","
     fi
   fi

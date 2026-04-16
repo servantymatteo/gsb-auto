@@ -131,6 +131,91 @@
       args:
         executable: /bin/bash
 
+    - name: Créer les répertoires de config SnappyMail
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0750'
+      loop:
+        - "{{ snappymail_dir }}/data/_data_/_default_/configs"
+        - "{{ snappymail_dir }}/data/_data_/_default_/domains"
+
+    - name: Générer le hash du mot de passe admin SnappyMail
+      shell: php -r "echo password_hash('{{ mail_admin_password }}', PASSWORD_BCRYPT);"
+      register: snappymail_admin_hash
+      changed_when: false
+
+    - name: Configurer SnappyMail (application.ini)
+      copy:
+        dest: "{{ snappymail_dir }}/data/_data_/_default_/configs/application.ini"
+        owner: www-data
+        group: www-data
+        mode: '0640'
+        content: |
+          [webmail]
+          title = "SnappyMail GSB"
+          loading_description = "GSB"
+          app_path = "/"
+          app_index_as_plain_text = Off
+
+          [login]
+          default_domain = "{{ mail_domain }}"
+          allow_languages_on_settings = On
+
+          [security]
+          admin_password = "{{ snappymail_admin_hash.stdout }}"
+          admin_panel_host = ""
+          allow_two_factor_auth = Off
+          csrf_protection = On
+
+          [logs]
+          enable = On
+          write_on_error_only = On
+          filename = "{date:Y-m-d}.log"
+
+          [cache]
+          enable = On
+          system = "files"
+          http = 3600
+          server = 43200
+
+          [version]
+          current = "2.0"
+
+    - name: Configurer le domaine IMAP/SMTP SnappyMail
+      copy:
+        dest: "{{ snappymail_dir }}/data/_data_/_default_/domains/default.json"
+        owner: www-data
+        group: www-data
+        mode: '0640'
+        content: |
+          {
+            "imap": {
+              "host": "localhost",
+              "port": 143,
+              "secure": 0,
+              "shortLogin": false,
+              "useAuth": true,
+              "setLogins": true,
+              "disabled": false
+            },
+            "smtp": {
+              "host": "localhost",
+              "port": 25,
+              "secure": 0,
+              "shortLogin": false,
+              "useAuth": false,
+              "setLogins": false,
+              "phpMail": false,
+              "disabled": false
+            },
+            "sieve": { "allow": false },
+            "white": 0,
+            "enabled": true
+          }
+
     - name: Configurer Apache pour SnappyMail
       copy:
         dest: /etc/apache2/sites-available/snappymail.conf
