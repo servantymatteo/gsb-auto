@@ -225,7 +225,7 @@
 
     - name: Configurer le domaine IMAP/SMTP SnappyMail
       copy:
-        dest: "{{ snappymail_dir }}/data/_data_/_default_/domains/default.json"
+        dest: "{{ snappymail_dir }}/data/_data_/_default_/domains/{{ mail_domain }}.json"
         owner: www-data
         group: www-data
         mode: '0640'
