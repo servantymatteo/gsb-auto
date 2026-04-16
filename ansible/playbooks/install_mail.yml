@@ -1,5 +1,5 @@
 ---
-- name: Installer le serveur mail (Postfix + Dovecot + SnappyMail)
+- name: Installer le serveur mail (Postfix + Dovecot + Roundcube)
   hosts: all
   become: true
 
@@ -7,14 +7,17 @@
     mail_domain: "gsb.local"
     mail_admin_user: "admin"
     mail_admin_password: "Formation13@"
-    snappymail_dir: "/var/www/snappymail"
+    roundcube_des_key: "GSBMailRoundcubeKey123"
 
   tasks:
+
+    # ── Mise à jour ───────────────────────────────────────────────────────────
     - name: Mettre à jour le cache apt
       apt:
         update_cache: true
         cache_valid_time: 3600
 
+    # ── Pré-configuration des paquets interactifs ─────────────────────────────
     - name: Pré-configurer Postfix
       debconf:
         name: postfix
@@ -25,6 +28,17 @@
         - { question: "postfix/mailname",        value: "{{ mail_domain }}", vtype: "string" }
         - { question: "postfix/main_mailer_type", value: "Internet Site",    vtype: "select" }
 
+    - name: Pré-configurer Roundcube (SQLite, sans mot de passe DB)
+      debconf:
+        name: roundcube-core
+        question: "{{ item.question }}"
+        value: "{{ item.value }}"
+        vtype: "{{ item.vtype }}"
+      loop:
+        - { question: "roundcube/dbconfig-install", value: "true",    vtype: "boolean" }
+        - { question: "roundcube/database-type",    value: "sqlite3", vtype: "select"  }
+
+    # ── Installation ──────────────────────────────────────────────────────────
     - name: Installer les paquets
       apt:
         name:
@@ -38,12 +52,15 @@
           - php-xml
           - php-zip
           - php-mbstring
-          - php-gnupg
+          - php-intl
           - libapache2-mod-php
-          - curl
-          - unzip
+          - roundcube
+          - roundcube-core
+          - roundcube-sqlite3
+          - sqlite3
         state: present
 
+    # ── Postfix ───────────────────────────────────────────────────────────────
     - name: Configurer Postfix
       copy:
         dest: /etc/postfix/main.cf
@@ -61,39 +78,50 @@
           inet_interfaces = all
           inet_protocols = all
 
-    - name: Configurer Dovecot — plaintext auth
+    # ── Dovecot — authentification ────────────────────────────────────────────
+    - name: Dovecot — autoriser auth en clair (pas de TLS obligatoire)
       lineinfile:
         path: /etc/dovecot/conf.d/10-auth.conf
         regexp: '^#?disable_plaintext_auth'
         line: 'disable_plaintext_auth = no'
 
-    - name: Configurer Dovecot — mécanismes auth
+    - name: Dovecot — mécanismes PLAIN et LOGIN
       lineinfile:
         path: /etc/dovecot/conf.d/10-auth.conf
         regexp: '^#?auth_mechanisms'
         line: 'auth_mechanisms = plain login'
 
-    - name: Configurer Dovecot — strip domaine du login
+    - name: Dovecot — strip le @domaine du login (admin@gsb.local → admin)
       lineinfile:
         path: /etc/dovecot/conf.d/10-auth.conf
         regexp: '^#?auth_username_format'
-        line: 'auth_username_format = %n'
+        line: 'auth_username_format = %Ln'
 
-    - name: Configurer Dovecot — maildir
+    - name: Dovecot — désactiver l'auth PAM système
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^!include auth-system\.conf\.ext'
+        line: '#!include auth-system.conf.ext'
+
+    - name: Dovecot — activer l'auth par fichier passwd
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^#!include auth-passwdfile\.conf\.ext'
+        line: '!include auth-passwdfile.conf.ext'
+
+    - name: Dovecot — emplacement des mails (Maildir)
       lineinfile:
         path: /etc/dovecot/conf.d/10-mail.conf
         regexp: '^#?mail_location'
         line: 'mail_location = maildir:~/Maildir'
 
-    - name: Créer le compte utilisateur mail
+    # ── Utilisateur système + Maildir ─────────────────────────────────────────
+    - name: Créer l'utilisateur mail
       user:
         name: "{{ mail_admin_user }}"
         shell: /bin/bash
         create_home: true
         state: present
-
-    - name: Définir le mot de passe
-      shell: echo "{{ mail_admin_user }}:{{ mail_admin_password }}" | chpasswd
 
     - name: Créer le Maildir
       file:
@@ -103,22 +131,26 @@
         group: "{{ mail_admin_user }}"
         mode: '0700'
 
+    # ── Dovecot — fichier passwd (plus fiable que PAM) ────────────────────────
     - name: Générer le hash du mot de passe Dovecot
       shell: "doveadm pw -s SHA512-CRYPT -p '{{ mail_admin_password }}'"
-      register: dovecot_password_hash
+      register: dovecot_pw
       changed_when: false
 
-    - name: Créer le fichier passwd Dovecot
+    - name: Créer /etc/dovecot/users
       copy:
         dest: /etc/dovecot/users
-        content: "{{ mail_admin_user }}:{{ dovecot_password_hash.stdout }}\n"
+        content: "{{ mail_admin_user }}:{{ dovecot_pw.stdout }}\n"
         owner: root
         group: dovecot
         mode: '0640'
 
-    - name: Créer l'auth passdb passwd-file pour Dovecot
+    - name: Configurer le driver passdb/userdb pour Dovecot
       copy:
         dest: /etc/dovecot/conf.d/auth-passwdfile.conf.ext
+        owner: root
+        group: dovecot
+        mode: '0640'
         content: |
           passdb {
             driver = passwd-file
@@ -127,172 +159,112 @@
           userdb {
             driver = passwd
           }
-        owner: root
-        group: dovecot
-        mode: '0640'
 
-    - name: Désactiver l'auth PAM système de Dovecot
-      lineinfile:
-        path: /etc/dovecot/conf.d/10-auth.conf
-        regexp: '^!include auth-system\.conf\.ext'
-        line: '#!include auth-system.conf.ext'
-
-    - name: Activer l'auth passwd-file de Dovecot
-      lineinfile:
-        path: /etc/dovecot/conf.d/10-auth.conf
-        regexp: '^#!include auth-passwdfile\.conf\.ext'
-        line: '!include auth-passwdfile.conf.ext'
-
-    - name: Récupérer la dernière version de SnappyMail
-      shell: |
-        curl -s https://api.github.com/repos/the-djmaze/snappymail/releases/latest \
-          | grep "browser_download_url.*snappymail-.*\.zip" \
-          | grep -v "demo\|asc" \
-          | head -1 \
-          | cut -d '"' -f 4
-      register: snappymail_url
-      changed_when: false
-
-    - name: Créer le répertoire SnappyMail
-      file:
-        path: "{{ snappymail_dir }}"
-        state: directory
+    # ── Roundcube — configuration principale ──────────────────────────────────
+    - name: Configurer Roundcube
+      copy:
+        dest: /etc/roundcube/config.inc.php
         owner: www-data
         group: www-data
-        mode: '0755'
+        mode: '0640'
+        content: |
+          <?php
+          $config = [];
 
-    - name: Télécharger et extraire SnappyMail
+          // Base de données SQLite
+          $config['db_dsnw'] = 'sqlite:////var/lib/roundcube/roundcube.db?mode=0640';
+
+          // Serveur IMAP (Dovecot local)
+          $config['imap_host'] = 'localhost';
+          $config['imap_port'] = 143;
+          $config['imap_auth_type'] = 'PLAIN';
+
+          // Serveur SMTP (Postfix local, sans auth)
+          $config['smtp_host'] = 'localhost';
+          $config['smtp_port'] = 25;
+          $config['smtp_user'] = '';
+          $config['smtp_pass'] = '';
+          $config['smtp_auth_type'] = '';
+
+          // Domaine : Roundcube strip @gsb.local avant d'envoyer à Dovecot
+          // Permet de se connecter avec "admin" ou "admin@gsb.local"
+          $config['username_domain'] = '{{ mail_domain }}';
+
+          // Apparence
+          $config['product_name'] = 'GSB Webmail';
+          $config['skin'] = 'elastic';
+          $config['language'] = 'fr_FR';
+
+          // Clé de chiffrement (fixe pour éviter les perfs de session)
+          $config['des_key'] = '{{ roundcube_des_key }}';
+
+          // Plugins
+          $config['plugins'] = ['archive', 'zipdownload'];
+
+    # ── Roundcube — base SQLite ───────────────────────────────────────────────
+    - name: Initialiser la base SQLite Roundcube si absente
       shell: |
-        curl -fsSL "{{ snappymail_url.stdout }}" -o /tmp/snappymail.zip
-        unzip -q -o /tmp/snappymail.zip -d "{{ snappymail_dir }}"
-        chown -R www-data:www-data "{{ snappymail_dir }}"
-        rm /tmp/snappymail.zip
+        if [ ! -f /var/lib/roundcube/roundcube.db ]; then
+          sqlite3 /var/lib/roundcube/roundcube.db \
+            < /usr/share/roundcube/SQL/sqlite.initial.sql
+        fi
+        chown www-data:www-data /var/lib/roundcube/roundcube.db
+        chmod 0640 /var/lib/roundcube/roundcube.db
       args:
         executable: /bin/bash
 
-    - name: Créer les répertoires de config SnappyMail
-      file:
-        path: "{{ item }}"
-        state: directory
-        owner: www-data
-        group: www-data
-        mode: '0750'
-      loop:
-        - "{{ snappymail_dir }}/data/_data_/_default_/configs"
-        - "{{ snappymail_dir }}/data/_data_/_default_/domains"
-
-    - name: Générer le hash du mot de passe admin SnappyMail
-      shell: php -r "echo password_hash('{{ mail_admin_password }}', PASSWORD_BCRYPT);"
-      register: snappymail_admin_hash
-      changed_when: false
-
-    - name: Configurer SnappyMail (application.ini)
-      copy:
-        dest: "{{ snappymail_dir }}/data/_data_/_default_/configs/application.ini"
-        owner: www-data
-        group: www-data
-        mode: '0640'
-        content: |
-          [webmail]
-          title = "SnappyMail GSB"
-          loading_description = "GSB"
-          app_path = "/"
-          app_index_as_plain_text = Off
-
-          [login]
-          default_domain = "{{ mail_domain }}"
-          allow_languages_on_settings = On
-
-          [security]
-          admin_password = "{{ snappymail_admin_hash.stdout }}"
-          admin_panel_host = ""
-          allow_two_factor_auth = Off
-          csrf_protection = On
-
-          [logs]
-          enable = On
-          write_on_error_only = On
-          filename = "{date:Y-m-d}.log"
-
-          [cache]
-          enable = On
-          system = "files"
-          http = 3600
-          server = 43200
-
-          [version]
-          current = "2.0"
-
-    - name: Configurer le domaine IMAP/SMTP SnappyMail
-      copy:
-        dest: "{{ snappymail_dir }}/data/_data_/_default_/domains/{{ mail_domain }}.json"
-        owner: www-data
-        group: www-data
-        mode: '0640'
-        content: |
-          {
-            "imap": {
-              "host": "localhost",
-              "port": 143,
-              "secure": 0,
-              "shortLogin": false,
-              "useAuth": true,
-              "setLogins": true,
-              "disabled": false
-            },
-            "smtp": {
-              "host": "localhost",
-              "port": 25,
-              "secure": 0,
-              "shortLogin": false,
-              "useAuth": false,
-              "setLogins": false,
-              "phpMail": false,
-              "disabled": false
-            },
-            "sieve": { "allow": false },
-            "white": 0,
-            "enabled": true
-          }
-
-    - name: Configurer Apache pour SnappyMail
-      copy:
-        dest: /etc/apache2/sites-available/snappymail.conf
-        content: |
-          <VirtualHost *:80>
-            ServerName mail.{{ mail_domain }}
-            DocumentRoot {{ snappymail_dir }}
-            DirectoryIndex index.php
-
-            <Directory {{ snappymail_dir }}>
-              Options -Indexes +FollowSymLinks
-              AllowOverride All
-              Require all granted
-            </Directory>
-
-            Alias /webmail {{ snappymail_dir }}
-            Alias /mail    {{ snappymail_dir }}
-
-            ErrorLog ${APACHE_LOG_DIR}/snappymail-error.log
-            CustomLog ${APACHE_LOG_DIR}/snappymail-access.log combined
-          </VirtualHost>
-
+    # ── Apache ────────────────────────────────────────────────────────────────
     - name: Désactiver le site Apache par défaut
       command: a2dissite 000-default
       args:
         removes: /etc/apache2/sites-enabled/000-default.conf
       ignore_errors: true
 
-    - name: Activer le site SnappyMail
-      command: a2ensite snappymail
+    - name: Trouver le répertoire web Roundcube
+      shell: |
+        # Chercher index.php de roundcube dans les chemins Debian classiques
+        for d in /var/lib/roundcube/public_html /usr/share/roundcube; do
+          [ -f "$d/index.php" ] && echo "$d" && exit 0
+        done
+        # Fallback : recherche large
+        find /var /usr/share -maxdepth 4 -name "index.php" \
+          -path "*roundcube*" 2>/dev/null | head -1 | xargs dirname
+      register: rc_webroot
+      changed_when: false
+
+    - name: Configurer Apache pour Roundcube (à la racine /)
+      copy:
+        dest: /etc/apache2/sites-available/webmail.conf
+        content: |
+          <VirtualHost *:80>
+            ServerName mail.{{ mail_domain }}
+            DocumentRoot {{ rc_webroot.stdout }}
+            DirectoryIndex index.php
+
+            <Directory {{ rc_webroot.stdout }}>
+              Options -Indexes +FollowSymLinks
+              AllowOverride All
+              Require all granted
+            </Directory>
+
+            Alias /webmail {{ rc_webroot.stdout }}
+            Alias /mail    {{ rc_webroot.stdout }}
+
+            ErrorLog  ${APACHE_LOG_DIR}/webmail-error.log
+            CustomLog ${APACHE_LOG_DIR}/webmail-access.log combined
+          </VirtualHost>
+
+    - name: Activer le site webmail
+      command: a2ensite webmail
       args:
-        creates: /etc/apache2/sites-enabled/snappymail.conf
+        creates: /etc/apache2/sites-enabled/webmail.conf
 
     - name: Activer mod_rewrite
       apache2_module:
         name: rewrite
         state: present
 
+    # ── Démarrage des services ────────────────────────────────────────────────
     - name: Démarrer et activer les services
       systemd:
         name: "{{ item }}"
@@ -304,7 +276,8 @@
         - dovecot
         - apache2
 
-    - name: Ouvrir les ports firewall
+    # ── Firewall ──────────────────────────────────────────────────────────────
+    - name: Ouvrir les ports (SMTP 25, IMAP 143, Submission 587, HTTP 80)
       ufw:
         rule: allow
         port: "{{ item }}"
@@ -312,11 +285,12 @@
       loop: ['25', '143', '587', '80']
       ignore_errors: true
 
+    # ── Résumé ────────────────────────────────────────────────────────────────
     - name: Résumé
       debug:
         msg:
           - "Serveur mail opérationnel"
           - "Domaine : {{ mail_domain }}"
-          - "Webmail : http://{{ ansible_default_ipv4.address }}"
-          - "Compte  : {{ mail_admin_user }}@{{ mail_domain }} / {{ mail_admin_password }}"
-          - "Admin SnappyMail : http://{{ ansible_default_ipv4.address }}/?admin"
+          - "Webmail : http://{{ ansible_default_ipv4.address }}/"
+          - "Login   : {{ mail_admin_user }}  OU  {{ mail_admin_user }}@{{ mail_domain }}"
+          - "Mot de passe : {{ mail_admin_password }}"
