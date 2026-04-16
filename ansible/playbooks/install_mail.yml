@@ -73,6 +73,12 @@
         regexp: '^#?auth_mechanisms'
         line: 'auth_mechanisms = plain login'
 
+    - name: Configurer Dovecot — strip domaine du login
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^#?auth_username_format'
+        line: 'auth_username_format = %n'
+
     - name: Configurer Dovecot — maildir
       lineinfile:
         path: /etc/dovecot/conf.d/10-mail.conf
