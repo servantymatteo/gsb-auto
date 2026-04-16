@@ -138,12 +138,12 @@
           <VirtualHost *:80>
             ServerName mail.{{ mail_domain }}
             DocumentRoot {{ snappymail_dir }}
+            DirectoryIndex index.php
 
             <Directory {{ snappymail_dir }}>
               Options -Indexes +FollowSymLinks
               AllowOverride All
               Require all granted
-              DirectoryIndex index.php
             </Directory>
 
             Alias /webmail {{ snappymail_dir }}
@@ -152,6 +152,12 @@
             ErrorLog ${APACHE_LOG_DIR}/snappymail-error.log
             CustomLog ${APACHE_LOG_DIR}/snappymail-access.log combined
           </VirtualHost>
+
+    - name: Désactiver le site Apache par défaut
+      command: a2dissite 000-default
+      args:
+        removes: /etc/apache2/sites-enabled/000-default.conf
+      ignore_errors: true
 
     - name: Activer le site SnappyMail
       command: a2ensite snappymail
