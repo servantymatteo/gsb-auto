@@ -309,32 +309,32 @@
         content: |
           {
             "IMAP": {
-              "Host": "localhost",
-              "Port": 143,
-              "Secure": "",
-              "ShortLogin": false,
-              "UseAuth": true,
-              "SetLogins": true,
-              "Disabled": false
+              "host": "localhost",
+              "port": 143,
+              "secure": "",
+              "shortLogin": false,
+              "useAuth": true,
+              "setLogins": true,
+              "disabled": false
             },
             "SMTP": {
-              "Host": "localhost",
-              "Port": 25,
-              "Secure": "",
-              "ShortLogin": false,
-              "UseAuth": false,
-              "SetLogins": false,
-              "PhpMail": false,
-              "Disabled": false
+              "host": "localhost",
+              "port": 25,
+              "secure": "",
+              "shortLogin": false,
+              "useAuth": false,
+              "setLogins": false,
+              "phpMail": false,
+              "disabled": false
             },
             "Sieve": {
-              "Allow": false,
-              "Host": "",
-              "Port": 4190,
-              "Secure": "",
-              "ShortLogin": false,
-              "UseAuth": false,
-              "SetLogins": false
+              "allow": false,
+              "host": "",
+              "port": 4190,
+              "secure": "",
+              "shortLogin": false,
+              "useAuth": false,
+              "setLogins": false
             },
             "white": 0,
             "Enabled": true,
